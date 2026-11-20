@@ -31,6 +31,8 @@ The live page is an installable web app. Once installed it opens full screen fro
 
 The first build succeeded. The APK itself has not been installed on a phone yet. If a later build fails, the **Actions** tab shows the step that failed.
 
+Each build is signed with the same test key (`keystore/test-builds.keystore`), so a new download installs over the old one and keeps your place. That key is public in this repository, which is fine for test builds but must not be used for a store release.
+
 ### A real iPhone app
 
 Apple only allows iPhone apps to be installed through the App Store or TestFlight, and building one needs a Mac with Xcode and a paid Apple Developer account. With those:
