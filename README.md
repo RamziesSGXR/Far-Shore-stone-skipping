@@ -29,7 +29,7 @@ The live page is an installable web app. Once installed it opens full screen fro
 
 `.github/workflows/android.yml` builds an Android app on every push to `main` and attaches it to a release called **Latest Android build**. Open the repository's **Releases** page on an Android phone, download `far-shore.apk`, and open it to install. Android will ask you to allow installs from your browser the first time.
 
-This workflow has not been run yet. If its first run fails, the **Actions** tab shows the step that failed.
+The first build succeeded. The APK itself has not been installed on a phone yet. If a later build fails, the **Actions** tab shows the step that failed.
 
 ### A real iPhone app
 
@@ -110,5 +110,5 @@ Everything is in the one script inside `index.html`. The numbers most worth chan
 ## Known limits
 
 - On iPhone, sound made by a web page is silenced by the ring/silent switch. A native iOS build can change that with an audio-session plugin; it is not set up yet.
-- The Android and iOS projects are generated from the web app and have not been built or run on a device from this repository yet.
+- The Android APK builds on GitHub but has not been run on a device yet. The iOS project has not been built.
 - Each kind of event (boat, animal, weather) has one form, and they repeat over a long session.
