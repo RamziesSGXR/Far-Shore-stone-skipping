@@ -1,0 +1,25 @@
+{
+  "name": "far-shore",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Far Shore, a calm stone-skipping walk across the water. Web app with Capacitor wrappers for Android and iOS.",
+  "scripts": {
+    "web": "node scripts/copy-web.js",
+    "sync": "npm run web && cap sync",
+    "add:android": "npm run web && cap add android && npm run icons:android",
+    "add:ios": "npm run web && cap add ios && npm run icons:ios",
+    "icons:android": "capacitor-assets generate --android",
+    "icons:ios": "capacitor-assets generate --ios",
+    "android": "npm run sync && cap open android",
+    "ios": "npm run sync && cap open ios"
+  },
+  "dependencies": {
+    "@capacitor/android": "^8.6.2",
+    "@capacitor/core": "^8.6.2",
+    "@capacitor/ios": "^8.6.2"
+  },
+  "devDependencies": {
+    "@capacitor/assets": "^4.0.0",
+    "@capacitor/cli": "^8.6.2"
+  }
+}
