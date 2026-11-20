@@ -87,7 +87,7 @@ On a keyboard: Space throws or hops, Arrow Up always throws, Enter steps onto so
 
 - **Skipping physics** modelled on the published stone-skipping experiments: a stone rebounds only above a minimum speed, that speed is lowest when the stone's face is tilted about 20 degrees to the water, it never rebounds past about 45 degrees, and spin is what holds the tilt steady.
 - **Wind waves** that run downwind with long crests, and an ocean swell that lifts the water, the boats and you as it passes.
-- **A crossing** with bare islands in the shallows near each shore and boats out at sea: skiffs, rafts, sloops, houseboats and lit fishing boats. Stepping aboard rings the ship's bell and lights the boat's lamps. Some have a cat.
+- **A crossing** with plain sand islands in the shallows near each shore and boats out at sea: skiffs, rafts, sloops, houseboats and lit fishing boats. Stepping aboard rings the ship's bell and lights the boat's lamps. Some have a cat.
 - **Bell buoys** between boats, a lighthouse, cairn and fire on the far shore, and a fire on the home shore.
 - **Weather and time:** dawn, day, dusk and night cycle as you go. Squalls bring heavy cloud, rain, sheet lightning and far-off thunder, and a rainbow afterwards when the sun is behind you.
 - **Night skies:** stars, shooting stars, and northern lights far from land, all reflected in the water.
