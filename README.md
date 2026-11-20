@@ -25,10 +25,12 @@ You can throw at any time, even mid-hop. Each throw clears the ripples still ahe
 - **Skipping physics** modelled on the published stone-skipping experiments: a stone rebounds only above a minimum speed, that speed is lowest when the stone's face is tilted about 20 degrees to the water, it never rebounds past about 45 degrees, and spin is what holds the tilt steady.
 - **Wind waves** that run downwind with long crests, longer waves moving faster, and fine ripples only where a gust touches down. The stone meets the same waves you see.
 - **An ocean swell** that lifts the water, the boats and you as it passes.
-- **A crossing** with bare islands in the shallows near each shore, and skiffs, sloops and lit fishing boats out at sea.
-- **Weather and time:** dawn, day, dusk and night cycle as you go, with rain squalls and far-off thunder at points along the way.
-- **Company:** fish, birds, dolphins that run alongside, and now and then a whale.
-- **Sound** synthesised in the page: chimes for each skip and landing, splashes, wind, rain, and whale song.
+- **A crossing** with bare islands in the shallows near each shore and boats out at sea: skiffs, rafts, sloops, houseboats and lit fishing boats. Stepping aboard rings the ship's bell and lights the boat's lamps. Some have a cat.
+- **Bell buoys** between boats, a lighthouse, cairn and fire on the far shore, and a fire on the home shore.
+- **Weather and time:** dawn, day, dusk and night cycle as you go. Squalls bring heavy cloud, rain that dimples the water, sheet lightning and far-off thunder, and a rainbow afterwards when the sun is behind you.
+- **Night skies:** stars, shooting stars, and northern lights far from land, all reflected in the water.
+- **Company:** fish, birds, a low-gliding seabird, dolphins that run alongside, flying fish, a turtle, glowing jellyfish at night, and now and then a whale that spouts, sings and lifts its tail.
+- **Sound** synthesised in the page: chimes for each skip and landing, splashes, wind, rain, thunder, bells, and whale song.
 
 ## Tuning
 
@@ -45,4 +47,4 @@ Everything is in the one script inside `index.html`. The numbers most worth chan
 
 ## Status
 
-This is a prototype. The ocean crossing is a first pass: the stages, boats, weather and animals exist, but there is one of each kind of event and they repeat. The physics constants for speed loss per skip and wave strength are hand-tuned, not measured.
+This is a prototype. The crossing has a spread of boats, weather and animals, but each event has one form and they repeat over a long session. The physics constants for speed loss per skip and wave strength are hand-tuned, not measured.
