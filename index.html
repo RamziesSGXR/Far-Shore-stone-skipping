@@ -1,0 +1,1378 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Far Shore</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Italiana&family=Figtree:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{
+  /* layout: the lake fills the frame; the title floats in the sky, one hint sits low, one control hugs the corner */
+  color-scheme: dark;
+  --ink:#f7f2ea;
+  --ink-soft:rgba(247,242,234,.74);
+  --veil:rgba(16,24,44,.30);
+  --veil-line:rgba(247,242,234,.28);
+  --night:#0b1026;
+  --font-display:'Italiana','Cormorant Garamond',Georgia,serif;
+  --font-body:'Figtree',system-ui,-apple-system,'Segoe UI',sans-serif;
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0;background:var(--night);color:var(--ink);font-family:var(--font-body);overflow:hidden}
+#lake{position:fixed;inset:0;width:100%;height:100%;display:block;touch-action:none;outline:none;cursor:grab}
+.title{
+  position:fixed;left:0;right:0;top:13%;padding:0 16px;text-align:center;pointer-events:none;
+  transition:opacity 2.4s ease;
+}
+.title h1{
+  margin:0;font-family:var(--font-display);font-weight:400;
+  font-size:clamp(44px,13vw,96px);letter-spacing:.14em;text-indent:.14em;line-height:1;
+  text-shadow:0 2px 28px rgba(20,24,60,.35);text-wrap:balance;
+}
+.title p{margin:14px 0 0;font-size:14px;letter-spacing:.22em;text-transform:uppercase;color:var(--ink-soft)}
+.title.gone{opacity:0}
+.hint{
+  position:fixed;left:0;right:0;bottom:9%;padding:0 16px;text-align:center;pointer-events:none;
+  font-size:15px;letter-spacing:.06em;color:var(--ink);
+  text-shadow:0 1px 14px rgba(10,14,40,.55);
+  opacity:0;transition:opacity .9s ease;
+}
+.hint.on{opacity:.92}
+.goal{
+  position:fixed;top:16px;left:16px;max-width:52%;pointer-events:none;
+  display:flex;flex-direction:column;gap:4px;
+  text-shadow:0 1px 14px rgba(10,14,40,.55);
+}
+.goal b{font-family:var(--font-display);font-weight:400;font-size:22px;letter-spacing:.06em;line-height:1.1}
+.goal span{font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-soft);font-variant-numeric:tabular-nums}
+#mode{top:58px}
+#sound{top:16px}
+#sound,#mode{
+  position:fixed;right:16px;
+  font:500 12px/1 var(--font-body);letter-spacing:.14em;text-transform:uppercase;
+  color:var(--ink);background:var(--veil);border:1px solid var(--veil-line);
+  padding:10px 14px;border-radius:999px;cursor:pointer;
+  -webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px);
+}
+#sound:focus-visible,#mode:focus-visible{outline:2px solid var(--ink);outline-offset:3px}
+@media (prefers-reduced-motion: reduce){.title,.hint{transition:none}}
+</style>
+</head>
+<body>
+<canvas id="lake" tabindex="0" aria-label="A lake seen from the shore. Hold the stone and flick it to skip it, then tap to hop across the ripples it leaves. The lake opens into an ocean with boats to rest on, and a far shore to turn back from."></canvas>
+<div class="title" id="title">
+  <h1>Far Shore</h1>
+  <p>Skip a stone. Walk where it touched. Cross to the far shore.</p>
+</div>
+<div class="hint on" id="hint">Hold the stone, then flick it out over the water.</div>
+<div class="goal" id="goal"><b id="goalName">Heron Rock</b><span id="goalDist">65 paces</span></div>
+<button id="sound" type="button" aria-pressed="true">Sound on</button>
+<button id="mode" type="button" aria-pressed="true">Hopping on</button>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+(function(){
+'use strict';
+var reduceMotion = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
+var hintEl = document.getElementById('hint');
+var titleEl = document.getElementById('title');
+var soundBtn = document.getElementById('sound');
+var hintText = hintEl.textContent;
+function setHint(text){
+  if(text === hintText) return;
+  hintText = text;
+  if(!text){ hintEl.classList.remove('on'); return; }
+  hintEl.textContent = text; hintEl.classList.add('on');
+}
+
+function start(saved){
+  var canvas = document.getElementById('lake');
+  if(!window.THREE){ setHint('The 3D library did not load. Check your connection and reopen the page.'); return; }
+  var renderer;
+  try{ renderer = new THREE.WebGLRenderer({canvas:canvas, antialias:true}); }
+  catch(e){ setHint('This device could not start 3D graphics, so the lake cannot be drawn.'); return; }
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
+
+  var V3 = THREE.Vector3;
+  var scene = new THREE.Scene();
+  var camera = new THREE.PerspectiveCamera(70, 1, 0.08, 3200);
+  camera.rotation.order = 'YXZ';
+  scene.add(camera);
+  scene.fog = new THREE.FogExp2(0xf6c7a6, 0.017);
+
+  /* ---------- palette through the day ---------- */
+  function C(h){ return new THREE.Color(h); }
+  var KEYS = [
+    {deep:C(0x1e3f66),top:C(0x5a6ea6),hor:C(0xf6c7a6),water:C(0x3b5876),mount:C(0x6f739c),sun:C(0xffe2b8),light:.85,star:.10,glit:.9},
+    {deep:C(0x0f4a80),top:C(0x4a8fc4),hor:C(0xd3e9ec),water:C(0x2b6d84),mount:C(0x6f9bb0),sun:C(0xfffbea),light:1.0,star:0,glit:.7},
+    {deep:C(0x23285c),top:C(0x3b3668),hor:C(0xf29a6c),water:C(0x3a3a63),mount:C(0x54406b),sun:C(0xffb37a),light:.72,star:.2,glit:1.0},
+    {deep:C(0x040b22),top:C(0x070b1e),hor:C(0x25335c),water:C(0x0c1730),mount:C(0x121a36),sun:C(0xcfdcff),light:.4,star:1,glit:.55}
+  ];
+  var P = {deep:C(0),top:C(0),hor:C(0),water:C(0),mount:C(0),sun:C(0),light:1,star:0,glit:1};
+  function palette(t){
+    t = ((t % 1) + 1) % 1;
+    var f = t * 4, i = Math.floor(f) % 4, j = (i + 1) % 4, u = f - Math.floor(f);
+    u = u * u * (3 - 2 * u);
+    var a = KEYS[i], b = KEYS[j];
+    P.top.copy(a.top).lerp(b.top,u); P.hor.copy(a.hor).lerp(b.hor,u);
+    P.deep.copy(a.deep).lerp(b.deep,u);
+    P.water.copy(a.water).lerp(b.water,u); P.mount.copy(a.mount).lerp(b.mount,u);
+    P.sun.copy(a.sun).lerp(b.sun,u);
+    P.light = a.light + (b.light - a.light) * u;
+    P.star = a.star + (b.star - a.star) * u;
+    P.glit = a.glit + (b.glit - a.glit) * u;
+  }
+  var sunDir = new V3(0,1,0);
+  function sunAt(t){
+    t = ((t % 1) + 1) % 1;
+    var el = t < 0.5 ? Math.sin(Math.PI * t / 0.5) * 0.72 + 0.035
+                     : Math.sin(Math.PI * (t - 0.5) / 0.5) * 0.5 + 0.035;
+    sunDir.set(-0.32, el, -1).normalize();
+  }
+
+  /* ---------- sky (one function, used for the sky and for what the water reflects) ---------- */
+  var SKY_GLSL = [
+    'uniform vec3 uTop,uHor,uSun,uSunDir,uMount; uniform float uTime,uNight,uRidge;',
+    'float hash(vec2 p){ return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453); }',
+    'float vnoise(vec2 p){ vec2 i=floor(p), f=fract(p); f=f*f*(3.0-2.0*f);',
+    ' return mix(mix(hash(i),hash(i+vec2(1.0,0.0)),f.x),mix(hash(i+vec2(0.0,1.0)),hash(i+vec2(1.0,1.0)),f.x),f.y); }',
+    'float ridgeH(float a,float s,float H){ return max(H*(0.36+0.30*sin(a*3.0+s*1.7)+0.20*sin(a*7.0+s*3.1)+0.12*sin(a*13.0+s*5.3)+0.06*sin(a*29.0+s*7.9)),H*0.07)*(0.55+1.7*cos(a)*cos(a))*uRidge; }',
+    'vec3 skyCol(vec3 d,float withRidge){',
+    ' float h = clamp(d.y,0.0,1.0);',
+    ' vec3 col = mix(uHor,uTop,pow(h,0.55));',
+    ' vec2 cp = d.xz/(d.y+0.18)*1.6 + vec2(uTime*0.008,0.0);',
+    ' float c = vnoise(cp)*0.6 + vnoise(cp*2.3+3.1)*0.4;',
+    ' c = smoothstep(0.5,0.85,c)*smoothstep(0.02,0.25,d.y);',
+    ' col = mix(col, mix(uHor,vec3(1.0),0.35)+uSun*0.12, c*0.5*(1.0-uNight*0.6));',
+    ' float s = max(dot(d,uSunDir),0.0);',
+    ' col += uSun*(smoothstep(0.9988,0.9995,s)*0.9 + pow(s,220.0)*0.4 + pow(s,10.0)*0.14 + pow(s,3.0)*0.05);',
+    ' if(withRidge>0.5){ float a = atan(d.z,d.x); float el = d.y/(length(d.xz)+0.0001);',
+    '  if(el < ridgeH(a,2.3,210.0)/1500.0) col = mix(uMount,uHor,0.74);',
+    '  if(el < ridgeH(a,5.1,105.0)/1050.0) col = mix(uMount,uHor,0.5); }',
+    ' return col; }'
+  ].join('\n');
+  var skyU = {uTop:{value:C(0)},uHor:{value:C(0)},uSun:{value:C(0)},uSunDir:{value:sunDir},uMount:{value:C(0)},uTime:{value:0},uNight:{value:0},uRidge:{value:1}};
+  var sky = new THREE.Mesh(new THREE.SphereGeometry(2000, 32, 16), new THREE.ShaderMaterial({
+    uniforms: skyU, side: THREE.BackSide, depthWrite:false, depthTest:false, fog:false,
+    vertexShader: 'varying vec3 vD; void main(){ vD = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }',
+    fragmentShader: 'precision highp float; varying vec3 vD;\n' + SKY_GLSL + '\nvoid main(){ gl_FragColor = vec4(skyCol(normalize(vD),0.0),1.0); }'
+  }));
+  sky.renderOrder = -10; sky.frustumCulled = false;
+  scene.add(sky);
+
+  var starGeo = new THREE.BufferGeometry();
+  (function(){
+    var n = 520, arr = new Float32Array(n * 3);
+    for(var i=0;i<n;i++){
+      var a = Math.random() * Math.PI * 2, y = 0.04 + Math.random() * 0.96, r = Math.sqrt(1 - y*y);
+      arr[i*3] = Math.cos(a) * r * 1500; arr[i*3+1] = y * 1500; arr[i*3+2] = Math.sin(a) * r * 1500;
+    }
+    starGeo.setAttribute('position', new THREE.BufferAttribute(arr, 3));
+  })();
+  var starMat = new THREE.PointsMaterial({color:0xffffff,size:1.9,sizeAttenuation:false,transparent:true,opacity:0,depthWrite:false,fog:false});
+  var stars = new THREE.Points(starGeo, starMat);
+  stars.frustumCulled = false;
+  scene.add(stars);
+
+  /* ---------- far ridges that never get closer ---------- */
+  function ridge(R, H, seed){
+    var segs = 260, pos = [], idx = [];
+    var s1 = seed*1.7, s2 = seed*3.1, s3 = seed*5.3, s4 = seed*7.9;
+    for(var i=0;i<=segs;i++){
+      var a = i / segs * Math.PI * 2;
+      var h = H * (0.36 + 0.30*Math.sin(a*3+s1) + 0.20*Math.sin(a*7+s2) + 0.12*Math.sin(a*13+s3) + 0.06*Math.sin(a*29+s4));
+      h = Math.max(h, H * 0.07) * (0.55 + 1.7 * Math.cos(a) * Math.cos(a));   // high walls to either side, open ahead
+      var x = Math.cos(a) * R, z = Math.sin(a) * R;
+      pos.push(x, -6, z, x, h, z);
+    }
+    for(var k=0;k<segs;k++){ var b = k*2; idx.push(b,b+1,b+2, b+1,b+3,b+2); }
+    var g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    g.setIndex(idx);
+    var m = new THREE.Mesh(g, new THREE.MeshBasicMaterial({side:THREE.DoubleSide, fog:false}));
+    m.frustumCulled = false;
+    return m;
+  }
+  var ridgeFar = ridge(1500, 210, 2.3), ridgeNear = ridge(1050, 105, 5.1);
+  scene.add(ridgeFar); scene.add(ridgeNear);
+
+  /* ---------- water ---------- */
+  var RN = 16, rip = [], ripI = 0;
+  for(var r0=0;r0<RN;r0++) rip.push(new THREE.Vector4(0,0,-100,0));
+  /* Wind waves. They run downwind with long crests across the wind, a narrow spread of directions,
+     longer waves moving faster (deep-water rule: speed grows with the square root of wavelength),
+     crests sharper than troughs, and fine ripples only where a gust is touching the water. */
+  var WIND = 0.9, WDX = Math.cos(WIND), WDZ = Math.sin(WIND);
+  function r4(v){ return parseFloat(v.toFixed(4)); }
+  var WAVES = [[-0.30,6.5,0.40],[-0.12,4.1,0.25],[0.0,2.7,0.17],[0.16,1.8,0.11],[0.34,1.2,0.07]].map(function(w){
+    var a = WIND + w[0], k = 6.28318 / w[1];
+    return {kx:r4(Math.cos(a) * k), kz:r4(Math.sin(a) * k), om:r4(Math.sqrt(9.81 * k)), w:r4(w[2] * 1.5), fade:r4(0.12 / w[1])};
+  });
+  function f4(v){ return v.toFixed(4); }
+  var WAVE_GLSL = WAVES.map(function(c){
+    return ' ph = ' + f4(c.kx) + '*p.x + ' + f4(c.kz) + '*p.y - ' + f4(c.om) + '*uTime; sv = 0.5+0.5*sin(ph);' +
+           ' wg += vec2(' + f4(c.kx) + ',' + f4(c.kz) + ')*(' + f4(c.w) + '*sqrt(sv)*cos(ph)*exp(-d*' + f4(c.fade) + '));';
+  }).join('\n');
+  /* The crossing. CROSS is the distance from the home shore to the far one, in metres.
+     Out past the shallows a long swell rolls through: two trains of long waves that lift the
+     water, the boats and you as they pass. `sea` is its height, eased toward calm near land and up in a squall. */
+  var CROSS = 4000, sea = 0;
+  var SW = [{kx:0.041, kz:0.160, om:1.273, w:0.6, ph:0}, {kx:-0.096, kz:0.257, om:1.637, w:0.4, ph:1.7}];
+  var SWELL_GLSL_H = SW.map(function(c){ return f4(c.w) + '*sin(' + f4(c.kx) + '*q.x+' + f4(c.kz) + '*q.y-' + f4(c.om) + '*uTime+' + f4(c.ph) + ')'; }).join(' + ');
+  var SWELL_GLSL_G = SW.map(function(c){ return f4(c.w) + '*cos(' + f4(c.kx) + '*q.x+' + f4(c.kz) + '*q.y-' + f4(c.om) + '*uTime+' + f4(c.ph) + ')*vec2(' + f4(c.kx) + ',' + f4(c.kz) + ')'; }).join(' + ');
+  function swellAt(x, z, t){
+    if(sea < 0.001) return 0;
+    var h = 0, dx = x - eye.x, dz = z - eye.z;
+    for(var i=0;i<SW.length;i++){ var c = SW[i]; h += c.w * Math.sin(c.kx*x + c.kz*z - c.om*t + c.ph); }
+    return h * sea * Math.exp(-Math.sqrt(dx*dx + dz*dz) * 0.0015);
+  }
+  // a disc of water that is fine underfoot and coarse at the horizon
+  function seaGeo(){
+    var rings = 70, segs = 72, pos = [0, 0, 0], idx = [];
+    for(var i=1;i<=rings;i++){ var r = 0.5 * (Math.pow(1.137, i) - 1) + i * 0.25;
+      for(var j=0;j<segs;j++){ var a = j / segs * Math.PI * 2; pos.push(Math.cos(a) * r, 0, Math.sin(a) * r); } }
+    for(var j2=0;j2<segs;j2++) idx.push(0, 1 + j2, 1 + (j2 + 1) % segs);
+    for(var i2=1;i2<rings;i2++) for(var j3=0;j3<segs;j3++){
+      var a2 = 1 + (i2 - 1) * segs + j3, b2 = 1 + (i2 - 1) * segs + (j3 + 1) % segs, c2 = a2 + segs, d2 = b2 + segs;
+      idx.push(a2, c2, b2, b2, c2, d2);
+    }
+    var g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setIndex(idx);
+    return g;
+  }
+  var MN = 16, marks = [];
+  for(var m1=0;m1<MN;m1++) marks.push(new V3(0, 0, 0));
+  var waterU = {
+    uNear:{value:C(0)},uHor:{value:C(0)},uSun:{value:C(0)},uSunDir:{value:sunDir},uTop:{value:C(0)},uMount:{value:C(0)},
+    uCam:{value:new V3()},uTime:{value:0},uNight:{value:0},uGlow:{value:C(0x7fe6ff)},uRip:{value:rip},uMark:{value:marks},uSea:{value:0},uRidge:{value:1},uNext:{value:new THREE.Vector4(0,0,1,0)}
+  };
+  var water = new THREE.Mesh(seaGeo(), new THREE.ShaderMaterial({
+    uniforms: waterU, fog:false, side:THREE.DoubleSide,
+    vertexShader: 'uniform vec3 uCam; uniform float uTime,uSea; varying vec3 vW; void main(){ vec4 w = modelMatrix * vec4(position,1.0); vec2 q = w.xz; w.y += (' + SWELL_GLSL_H + ')*uSea*exp(-length(q-uCam.xz)*0.0015); vW = w.xyz; gl_Position = projectionMatrix * viewMatrix * w; }',
+    fragmentShader: [
+      'precision highp float; varying vec3 vW;',
+      'uniform vec3 uNear,uCam,uGlow; uniform vec4 uRip[16]; uniform vec3 uMark[16]; uniform float uSea; uniform vec4 uNext;',
+      SKY_GLSL,
+      'void main(){',
+      ' vec2 p = vW.xz; vec3 toP = vW-uCam; float d = length(toP.xz); vec3 V = normalize(toP);',
+      ' vec2 gp = p - vec2(' + f4(WDX) + ',' + f4(WDZ) + ')*uTime*1.2;',
+      ' float gs = 0.5+0.5*sin(gp.x*0.021+uTime*0.02)*sin(gp.y*0.017+1.3); gs *= gs;',
+      ' float amp = (0.018+0.04*gs)*(1.0+uSea*1.2);',
+      ' vec2 wg = vec2(0.0); float ph; float sv;',
+      WAVE_GLSL,
+      ' wg += (vec2(vnoise(p*6.0+uTime*0.7), vnoise(p*6.0+31.0-uTime*0.6))-0.5)*gs*1.6*exp(-d*0.07);',
+      ' float near = exp(-d*0.03);',
+      ' float r = 0.0; float mg = 0.0;',
+      ' for(int j=0;j<16;j++){ vec3 M = uMark[j]; vec2 dv = p-M.xy; float x2 = dot(dv,dv);',
+      '  if(M.z<=0.0||x2>3.2) continue;',
+      '  r += cos(sqrt(x2)*10.0-uTime*2.6)*exp(-x2*2.3)*M.z*0.6; mg += exp(-x2*3.2)*M.z; }',
+      ' for(int i=0;i<16;i++){ vec4 R = uRip[i]; float age = uTime-R.z;',
+      '  if(age<0.0||age>7.5||R.w<=0.0) continue;',
+      '  float x = length(p-R.xy)-(age*1.45+0.25);',
+      '  r += sin(x*7.0)*exp(-x*x*1.5)*exp(-age*0.62)*R.w; }',
+      ' { vec2 dn = p-uNext.xy; float xn = length(dn)-uNext.z;',
+      '   float nr = (exp(-xn*xn*10.0) + 0.5*sin(xn*14.0)*exp(-xn*xn*3.0))*uNext.w; r += nr*0.45; mg += max(nr,0.0)*0.22; }',
+      ' vec2 q = p; vec2 sg = (' + SWELL_GLSL_G + ')*uSea*exp(-d*0.0015);',
+      ' vec2 gr = wg*amp*2.1 + sg;',
+      ' vec3 N = normalize(vec3(-gr.x + r*0.07, 1.0, -gr.y + r*0.07));',
+      ' vec3 Rf = reflect(V,N); Rf.y = abs(Rf.y)+0.002;',
+      ' vec3 refl = skyCol(normalize(Rf),1.0);',
+      ' float fres = 0.05+0.95*pow(1.0-max(dot(-V,N),0.0),4.0);',
+      ' vec3 col = mix(uNear,refl,clamp(fres,0.0,1.0));',
+      ' col *= 1.0-0.09*gs*(0.35+0.65*near);',
+      ' col += r*0.15*mix(vec3(1.0),uHor,0.45) + max(r,0.0)*uGlow*(0.12+0.5*uNight) + uGlow*mg*(0.09+0.22*uNight);',
+      ' gl_FragColor = vec4(col,1.0); }'
+    ].join('\n')
+  }));
+  water.frustumCulled = false;
+  scene.add(water);
+  function ripple(x, z, strength, delay){
+    rip[ripI].set(x, z, time + (delay || 0), strength);
+    ripI = (ripI + 1) % RN;
+  }
+
+  /* ---------- light ---------- */
+  var hemi = new THREE.HemisphereLight(0xffffff, 0x334455, 0.75);
+  var sunLight = new THREE.DirectionalLight(0xffffff, 0.8);
+  scene.add(hemi); scene.add(sunLight); scene.add(sunLight.target);
+
+  /* ---------- stones ---------- */
+  function soft(c){
+    var m = new THREE.MeshPhongMaterial({color:c, shininess:0, specular:0x000000});
+    m.onBeforeCompile = function(sh){
+      sh.fragmentShader = sh.fragmentShader.replace('#include <fog_fragment>', [
+        '#include <fog_fragment>',
+        '#ifdef USE_FOG',
+        ' float rimS = 1.0 - abs(dot(normalize(vNormal), normalize(vViewPosition)));',
+        ' gl_FragColor.rgb = mix(gl_FragColor.rgb, fogColor, rimS*rimS*0.6);',
+        '#endif'
+      ].join('\n'));
+    };
+    return m;
+  }
+  // a soft halo of shallows where land meets water
+  var haloTex = (function(){
+    var cv = document.createElement('canvas'); cv.width = cv.height = 128;
+    var g = cv.getContext('2d'), gr = g.createRadialGradient(64, 64, 0, 64, 64, 64);
+    gr.addColorStop(0, 'rgba(255,255,255,0.75)'); gr.addColorStop(0.62, 'rgba(255,255,255,0.6)'); gr.addColorStop(0.8, 'rgba(255,255,255,0.22)'); gr.addColorStop(1, 'rgba(255,255,255,0)');
+    g.fillStyle = gr; g.fillRect(0, 0, 128, 128);
+    return new THREE.CanvasTexture(cv);
+  })();
+  var haloMat = new THREE.MeshBasicMaterial({map:haloTex, color:0xcfd6c6, transparent:true, depthWrite:false});
+  function halo(radius){ var m = new THREE.Mesh(new THREE.CircleGeometry(radius, 40), haloMat); m.rotation.x = -Math.PI / 2; m.position.y = 0.012; return m; }
+  // land with a rounded shoulder that slides under the water instead of a cut edge
+  function landGeo(flat, edge){
+    var pts = [[0,1],[flat*0.82,1],[flat*0.93,0.9],[flat,0.7],[flat+edge*0.3,0.35],[flat+edge*0.6,0.0],[flat+edge*0.85,-0.3],[flat+edge,-0.6]].map(function(p){ return new THREE.Vector2(p[0], p[1]); });
+    var g = new THREE.LatheGeometry(pts, 44), ix = g.index.array;
+    for(var i=0;i<ix.length;i+=3){ var t = ix[i]; ix[i] = ix[i+2]; ix[i+2] = t; }   // face outward
+    g.computeVertexNormals();
+    return g;
+  }
+  var stoneGeo = new THREE.IcosahedronGeometry(1, 3);
+  (function(){
+    var p = stoneGeo.attributes.position;
+    for(var i=0;i<p.count;i++){
+      var x = p.getX(i), y = p.getY(i), z = p.getZ(i);
+      var k = 1 + 0.07*Math.sin(x*4.1+y*2.3+z*5.7) + 0.05*Math.sin(x*9.2-z*7.4+y*3.1);
+      p.setXYZ(i, x*k, y*k, z*k);
+    }
+  })();
+  var STONE_TINTS = [0x7f8289, 0x74797f, 0x8a8782, 0x6f757d];
+  var GLOW = C(0xffc98a);
+  function stoneMat(){
+    return soft(STONE_TINTS[Math.floor(Math.random()*STONE_TINTS.length)]);
+  }
+
+  // shore the walk starts from
+  var shore = new THREE.Mesh(landGeo(26, 3.5), soft(0xa99a86));
+  shore.scale.set(8, 0.4, 1); shore.position.set(0, -0.34, 24.6);
+  var shoreHalo = halo(33); shoreHalo.scale.x = 8; shoreHalo.position.set(0, 0.012, 24.6); scene.add(shoreHalo);
+  var farShore = new THREE.Mesh(landGeo(26, 3.5), soft(0xb3a48e));
+  farShore.scale.set(8, 0.4, 1); farShore.position.set(0, -0.34, -CROSS - 27.4); scene.add(farShore);
+  var farHalo = halo(33); farHalo.scale.x = 8; farHalo.position.set(0, 0.012, -CROSS - 27.4); scene.add(farHalo);
+  scene.add(shore);
+  [[-2.6,-1.2,.5],[3.1,-.9,.38],[-5.2,.4,.7],[5.6,.8,.55],[1.4,-1.6,.22],[-1.2,-1.75,.18]].forEach(function(s){
+    var m = new THREE.Mesh(stoneGeo, stoneMat());
+    m.scale.set(s[2], s[2]*0.45, s[2]*0.8); m.position.set(s[0], 0.08, s[1]); m.rotation.y = s[0]*2.1;
+    scene.add(m);
+  });
+
+  var stones = [];
+  // A touch point: where the skipping stone met the water. The stone itself is gone; what you hop on is the little wave it left.
+  function makeStone(x, z, r, gap, theta, note){
+    var st = {x:x, z:z, r:r, gap:gap, theta:theta, note:note, u:0, riseStart:time, rippled:false,
+              glow:0, glowTarget:0, fade:1, leaving:false, top:new V3(x, 0.03, z)};
+    stones.push(st);
+    return st;
+  }
+
+  // the stone in your hand, and the one in the air
+  var hand = new THREE.Mesh(stoneGeo, soft(0x8b8d92));
+  hand.scale.set(0.066, 0.018, 0.055);
+  camera.add(hand);
+  var handBase = new V3(0.12, -0.24, -0.55), handIn = 1;
+  var pebble = new THREE.Mesh(stoneGeo, soft(0x8b8d92));
+  pebble.scale.set(0.1, 0.028, 0.085); pebble.visible = false;
+  scene.add(pebble);
+
+  // the ring that closes on the next stone
+  var ringGeo = new THREE.RingGeometry(0.955, 1, 56); ringGeo.rotateX(-Math.PI / 2);
+  var ring = new THREE.Mesh(ringGeo, new THREE.MeshBasicMaterial({color:0xffffff, transparent:true, opacity:0, fog:false, depthWrite:false}));
+  ring.visible = false; scene.add(ring);
+
+  // where the stone will touch down, shown while you drag
+  var PV = 12, pvGeo = new THREE.CircleGeometry(1, 20); pvGeo.rotateX(-Math.PI / 2);
+  var pvMat = new THREE.MeshBasicMaterial({color:0xffffff, transparent:true, opacity:0.75, fog:false, depthWrite:false});
+  var pv = [];
+  for(var pi=0;pi<PV;pi++){ var pm = new THREE.Mesh(pvGeo, pvMat); pm.visible = false; scene.add(pm); pv.push(pm); }
+
+  // soft light: drifting motes, sparks, and slow glows under the surface
+  var glowTex = (function(){
+    var cv = document.createElement('canvas'); cv.width = cv.height = 64;
+    var g = cv.getContext('2d'), gr = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+    gr.addColorStop(0, 'rgba(255,255,255,1)'); gr.addColorStop(0.25, 'rgba(255,255,255,0.55)'); gr.addColorStop(1, 'rgba(255,255,255,0)');
+    g.fillStyle = gr; g.fillRect(0, 0, 64, 64);
+    return new THREE.CanvasTexture(cv);
+  })();
+  var GN = 380, MOTES = 110, gPos = new Float32Array(GN*3), gCol = new Float32Array(GN*3), gVel = new Float32Array(GN*3),
+      gLife = new Float32Array(GN), gMax = new Float32Array(GN), gI = MOTES, glowC = C(0xffd9a0);
+  for(var m0=0;m0<GN;m0++){
+    if(m0 < MOTES){ gPos[m0*3] = (Math.random()-0.5)*36; gPos[m0*3+1] = 0.3 + Math.random()*3.8; gPos[m0*3+2] = (Math.random()-0.5)*36; gMax[m0] = Math.random()*6.28; }
+    else gPos[m0*3+1] = -60;
+  }
+  var glowGeo = new THREE.BufferGeometry();
+  glowGeo.setAttribute('position', new THREE.BufferAttribute(gPos, 3));
+  glowGeo.setAttribute('color', new THREE.BufferAttribute(gCol, 3));
+  var glowPts = new THREE.Points(glowGeo, new THREE.PointsMaterial({size:0.2, map:glowTex, transparent:true, blending:THREE.AdditiveBlending, depthWrite:false, vertexColors:true, fog:false}));
+  glowPts.frustumCulled = false; scene.add(glowPts);
+  function spark(x, y, z, n, spread, up){
+    for(var i=0;i<n;i++){
+      var k = gI * 3;
+      gPos[k] = x + (Math.random()-0.5)*spread; gPos[k+1] = y + Math.random()*0.15; gPos[k+2] = z + (Math.random()-0.5)*spread;
+      gVel[k] = (Math.random()-0.5)*0.35; gVel[k+1] = up*(0.4 + Math.random()*0.8); gVel[k+2] = (Math.random()-0.5)*0.35;
+      gMax[gI] = gLife[gI] = 1 + Math.random()*1.4;
+      gI++; if(gI >= GN) gI = MOTES;
+    }
+  }
+  function glowUpdate(dt){
+    var night = P.star, base = 0.28 + 0.72 * night;
+    glowC.setRGB(1 - 0.4*night, 0.85 + 0.07*night, 0.63 + 0.37*night);
+    for(var i=0;i<GN;i++){
+      var k = i*3;
+      if(i < MOTES){
+        var ph = gMax[i];
+        gPos[k] += Math.sin(time*0.21 + ph) * 0.12 * dt + 0.05 * dt;
+        gPos[k+1] += Math.sin(time*0.33 + ph*1.7) * 0.07 * dt;
+        gPos[k+2] += Math.cos(time*0.17 + ph) * 0.12 * dt;
+        if(gPos[k] - eye.x > 18) gPos[k] -= 36; else if(gPos[k] - eye.x < -18) gPos[k] += 36;
+        if(gPos[k+2] - eye.z > 18) gPos[k+2] -= 36; else if(gPos[k+2] - eye.z < -18) gPos[k+2] += 36;
+        var tw = base * (0.45 + 0.55 * Math.sin(time*0.9 + ph*3.0));
+        gCol[k] = glowC.r*tw; gCol[k+1] = glowC.g*tw; gCol[k+2] = glowC.b*tw;
+      }else if(gLife[i] > 0){
+        gLife[i] -= dt;
+        gPos[k] += gVel[k]*dt; gPos[k+1] += gVel[k+1]*dt; gPos[k+2] += gVel[k+2]*dt;
+        var f = Math.max(0, gLife[i] / gMax[i]) * (0.6 + 0.4*night);
+        gCol[k] = glowC.r*f; gCol[k+1] = glowC.g*f; gCol[k+2] = glowC.b*f;
+        if(gLife[i] <= 0) gPos[k+1] = -60;
+      }
+    }
+    glowGeo.attributes.position.needsUpdate = true; glowGeo.attributes.color.needsUpdate = true;
+    for(var j=0;j<koi.length;j++){
+      var ko = koi[j]; ko.a += ko.w * dt;
+      ko.c.lerp(S.pos, Math.min(1, dt * 0.25));
+      var kx = ko.c.x + Math.cos(ko.a) * ko.rad, kz = ko.c.z + Math.sin(ko.a*0.83 + j) * ko.rad;
+      ko.m.rotation.y = Math.atan2(-(kz - ko.m.position.z), kx - ko.m.position.x);
+      ko.m.position.set(kx, 0.02, kz);
+      ko.m.material.opacity = (1 - ocean) * (0.16 + 0.5*night) * (0.7 + 0.3*Math.sin(time*0.7 + j*2.1));
+      ko.m.material.color.copy(waterU.uGlow.value);
+    }
+  }
+  var koi = [], koiGeo = new THREE.PlaneGeometry(1.9, 0.6); koiGeo.rotateX(-Math.PI / 2);
+  for(var ki=0;ki<4;ki++){
+    var km = new THREE.Mesh(koiGeo, new THREE.MeshBasicMaterial({map:glowTex, transparent:true, opacity:0.2, blending:THREE.AdditiveBlending, depthWrite:false, fog:false}));
+    scene.add(km);
+    koi.push({m:km, a:Math.random()*6.28, w:(0.1 + Math.random()*0.08) * (ki % 2 ? -1 : 1), rad:5 + ki*3.2, c:new V3(0, 0, -6)});
+  }
+
+  // splash droplets
+  var DN = 180, dPos = new Float32Array(DN*3), dVel = new Float32Array(DN*3), dLife = new Float32Array(DN), dI = 0;
+  for(var d0=0;d0<DN;d0++) dPos[d0*3+1] = -50;
+  var dropGeo = new THREE.BufferGeometry();
+  dropGeo.setAttribute('position', new THREE.BufferAttribute(dPos, 3));
+  var drops = new THREE.Points(dropGeo, new THREE.PointsMaterial({color:0xffffff, size:0.07, transparent:true, opacity:0.85, depthWrite:false}));
+  drops.frustumCulled = false; scene.add(drops);
+  function splash(x, z, amount){
+    var n = Math.round(6 + amount * 8);
+    for(var i=0;i<n;i++){
+      var k = dI * 3, a = Math.random() * Math.PI * 2, s = 0.4 + Math.random() * 1.1 * amount;
+      dPos[k] = x; dPos[k+1] = 0.03 + swellAt(x, z, time); dPos[k+2] = z;
+      dVel[k] = Math.cos(a) * s; dVel[k+1] = 1.4 + Math.random() * 2.2 * amount; dVel[k+2] = Math.sin(a) * s;
+      dLife[dI] = 1; dI = (dI + 1) % DN;
+    }
+  }
+
+  /* ---------- sound ---------- */
+  var ac = null, bus = null, out = null, noiseBuf = null, muted = false, ambG = null, rainG = null;
+  var RATIOS = [1, 9/8, 5/4, 3/2, 5/3];
+  function freq(k){ return 293.66 * RATIOS[((k % 5) + 5) % 5] * Math.pow(2, Math.floor(k / 5)); }
+  function audioInit(){
+    try{
+      if(!ac){
+        var AC = window.AudioContext || window.webkitAudioContext; if(!AC) return;
+        ac = new AC();
+        out = ac.createGain(); out.gain.value = muted ? 0 : 0.8; out.connect(ac.destination);
+        bus = ac.createGain(); bus.connect(out);
+        // a soft hall instead of an echo
+        var conv = ac.createConvolver(), irLen = Math.floor(ac.sampleRate * 3.2), ir = ac.createBuffer(2, irLen, ac.sampleRate);
+        for(var cc=0;cc<2;cc++){
+          var dd = ir.getChannelData(cc);
+          for(var nn=0;nn<irLen;nn++){ var tt = nn / irLen; dd[nn] = (Math.random() * 2 - 1) * Math.pow(1 - tt, 3.2) * (tt < 0.012 ? tt / 0.012 : 1); }
+        }
+        conv.buffer = ir;
+        var wet = ac.createGain(); wet.gain.value = 0.5;
+        bus.connect(conv); conv.connect(wet); wet.connect(out);
+        noiseBuf = ac.createBuffer(1, ac.sampleRate * 2, ac.sampleRate);
+        var ch = noiseBuf.getChannelData(0);
+        for(var i=0;i<ch.length;i++) ch[i] = Math.random() * 2 - 1;
+        var amb = ac.createBufferSource(); amb.buffer = noiseBuf; amb.loop = true;
+        var lp = ac.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 300;
+        var ag = ac.createGain(); ag.gain.value = 0.005;
+        amb.connect(lp); lp.connect(ag); ag.connect(out); amb.start(); ambG = ag;
+        var rn = ac.createBufferSource(); rn.buffer = noiseBuf; rn.loop = true;
+        var rhp = ac.createBiquadFilter(); rhp.type = 'highpass'; rhp.frequency.value = 2600;
+        rainG = ac.createGain(); rainG.gain.value = 0;
+        rn.connect(rhp); rhp.connect(rainG); rainG.connect(out); rn.start(0, 0.7);
+      }
+      if(ac.state === 'suspended') ac.resume();
+    }catch(e){ ac = null; }
+  }
+  function tone(f, vol, dur, type){
+    if(!ac) return;
+    var o = ac.createOscillator(), g = ac.createGain(), t = ac.currentTime;
+    o.type = type || 'sine'; o.frequency.value = f;
+    vol *= Math.min(1, Math.sqrt(520 / f));
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.linearRampToValueAtTime(vol, t + 0.035);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.connect(g); g.connect(bus); o.start(t); o.stop(t + dur + 0.05);
+  }
+  function bell(k, vol, shimmer){
+    var f = freq(k);
+    tone(f, vol, 2.2); tone(f * 2, vol * 0.12, 1.3);
+    if(shimmer) tone(f * 3, vol * 0.06, 1.7);
+  }
+  function hiss(vol, dur, f0, f1){
+    if(!ac || !noiseBuf) return;
+    var s = ac.createBufferSource(), bp = ac.createBiquadFilter(), g = ac.createGain(), t = ac.currentTime;
+    s.buffer = noiseBuf; bp.type = 'bandpass'; bp.Q.value = 0.5;
+    bp.frequency.setValueAtTime(f0, t); bp.frequency.exponentialRampToValueAtTime(f1, t + dur);
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.linearRampToValueAtTime(vol, t + Math.min(0.04, dur * 0.3));
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    s.connect(bp); bp.connect(g); g.connect(bus);
+    s.start(t, Math.random()); s.stop(t + dur + 0.05);
+  }
+  function chirp(f0, f1, vol, dur, delay){
+    if(!ac) return;
+    var o = ac.createOscillator(), g = ac.createGain(), t = ac.currentTime + (delay || 0);
+    o.frequency.setValueAtTime(f0, t); o.frequency.exponentialRampToValueAtTime(f1, t + dur);
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(vol, t + dur * 0.18);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.connect(g); g.connect(bus); o.start(t); o.stop(t + dur + 0.05);
+  }
+  function rumble(){
+    if(!ac || !noiseBuf) return;
+    var s = ac.createBufferSource(), lp = ac.createBiquadFilter(), g = ac.createGain(), t = ac.currentTime;
+    s.buffer = noiseBuf; lp.type = 'lowpass'; lp.frequency.value = 120;
+    g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(0.16, t + 0.45); g.gain.exponentialRampToValueAtTime(0.0001, t + 4.5);
+    s.connect(lp); lp.connect(g); g.connect(bus); s.start(t, Math.random()); s.stop(t + 4.6);
+  }
+  function whaleSong(){
+    if(!ac) return;
+    [0, 3.3].forEach(function(dl, i){
+      var o = ac.createOscillator(), g = ac.createGain(), t = ac.currentTime + dl;
+      o.frequency.setValueAtTime(i ? 210 : 170, t); o.frequency.linearRampToValueAtTime(i ? 300 : 250, t + 1.1); o.frequency.linearRampToValueAtTime(i ? 180 : 150, t + 2.4);
+      g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(0.03, t + 0.6); g.gain.exponentialRampToValueAtTime(0.0001, t + 2.6);
+      o.connect(g); g.connect(bus); o.start(t); o.stop(t + 2.7);
+    });
+  }
+  // something going into water: the low thump of the body, the air pocket closing, the spray, then stray drops
+  function plop(size, vol){
+    if(!ac || !noiseBuf) return;
+    if(vol === undefined) vol = 1;
+    chirp(240 - size * 70, 80, 0.17 * size * vol, 0.17);
+    chirp(430, 960, 0.045 * size * vol, 0.08, 0.07);
+    var s = ac.createBufferSource(), lp = ac.createBiquadFilter(), hp = ac.createBiquadFilter(), g = ac.createGain(), t = ac.currentTime;
+    s.buffer = noiseBuf; lp.type = 'lowpass'; hp.type = 'highpass'; hp.frequency.value = 260;
+    lp.frequency.setValueAtTime(3400, t); lp.frequency.exponentialRampToValueAtTime(480, t + 0.5);
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.linearRampToValueAtTime(0.1 * size * vol, t + 0.01);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.3 + 0.3 * size);
+    s.connect(lp); lp.connect(hp); hp.connect(g); g.connect(bus);
+    s.start(t, Math.random()); s.stop(t + 0.75);
+    var n = Math.round(2 + size * 5);
+    for(var i=0;i<n;i++){ var f = 1400 + Math.random() * 2200; chirp(f, f * 1.25, (0.01 + Math.random() * 0.012) * vol, 0.035, 0.14 + Math.random() * 0.55); }
+  }
+  soundBtn.addEventListener('click', function(){
+    muted = !muted; audioInit();
+    if(out) out.gain.value = muted ? 0 : 0.8;
+    soundBtn.textContent = muted ? 'Sound off' : 'Sound on';
+    soundBtn.setAttribute('aria-pressed', muted ? 'false' : 'true');
+  });
+
+  /* ---------- state ---------- */
+  var time = 0;
+  var S = {
+    mode:'aim', idx:-1, pos:new V3(0, 0.06, 0), heading:0, yaw:0, pitch:-0.12,
+    look:0, lookHold:false, hop:null, flight:null, landT:0, dip:0, streak:0,
+    dayT: (saved && typeof saved.dayT === 'number') ? saved.dayT : 0.02,
+    throws:0, hops:0, graces:0, aimSince:0, batch:0, sankT:-99, noneT:-99, stroll:null, arrived:'', preview:null, pan:0, dipA:0, dir:1, fwd:0, legs:0, flash:0, lastSkips:0, skipT:-99, skims:0
+  };
+  var hopOn = true, modeBtn = document.getElementById('mode');
+  modeBtn.addEventListener('click', function(){
+    hopOn = !hopOn;
+    modeBtn.textContent = hopOn ? 'Hopping on' : 'Just skipping';
+    modeBtn.setAttribute('aria-pressed', hopOn ? 'true' : 'false');
+    modeBtn.blur();
+    if(!hopOn){ var keep = S.hop ? S.idx + 2 : S.idx + 1; if(stones.length > keep) stones.length = keep; }
+  });
+  var EYE = 1.6, MAXHOP = 6;   // metres covered in one hop; anything farther is crossed in a run of skims
+  var AIM_HINT = 'Hold the stone, then flick it out over the water.';
+
+  /* ---------- places to reach ---------- */
+  var NAMES = ['Heron Rock','Birch Island','The Red Gate','Blossom Isle','The Seven Stones','Cedar Hush'];
+  var KINDS = ['rock','bare','gate','cairn','stones'];
+  var islands = [], goal = null, reached = 0, hudT = 0;
+  var goalNameEl = document.getElementById('goalName'), goalDistEl = document.getElementById('goalDist');
+  function lam(c){ return soft(c); }
+  var sandMat = lam(0xa99a86), trunkMat = lam(0x5b4a3c), leafMat = lam(0x4f7361), barkMat = lam(0xe9e6dc), birchMat = lam(0xc3cf74),
+      redMat = lam(0xb5533c), blossomMat = lam(0xf0b4c4), reedMat = lam(0x93a063), cedarMat = lam(0x35584c), mossMat = lam(0x86888a);
+  var GEO = {cyl:new THREE.CylinderGeometry(1, 1, 1, 14), cone:new THREE.ConeGeometry(1, 1, 7), ball:new THREE.IcosahedronGeometry(1, 3), box:new THREE.BoxGeometry(1, 1, 1)};
+  function part(g, geo, mat, x, y, z, sx, sy, sz){ var m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); m.scale.set(sx, sy, sz); g.add(m); return m; }
+  var TOP = 0.4, rnd = Math.random;
+  // Islands are bare sand and stone: no plants.
+  var BUILD = {
+    rock:function(g){
+      for(var i=0;i<5;i++){ var a = i * 1.26 + 0.4, rr = 3.1 + rnd() * 0.9, sc = 0.5 + rnd() * 0.7;
+        part(g, stoneGeo, stoneMat(), Math.cos(a) * rr, TOP + sc * 0.3, Math.sin(a) * rr, sc, sc * 0.7, sc * 0.85).rotation.y = rnd() * 6; }
+    },
+    bare:function(g){},
+    gate:function(g){
+      var gt = new THREE.Group(), a = rnd() * 6.28;
+      part(gt, GEO.cyl, redMat, -1.15, 1.35, 0, 0.11, 2.7, 0.11); part(gt, GEO.cyl, redMat, 1.15, 1.35, 0, 0.11, 2.7, 0.11);
+      part(gt, GEO.cyl, redMat, 0, 2.78, 0, 0.12, 3.2, 0.12).rotation.z = Math.PI / 2; part(gt, GEO.cyl, redMat, 0, 2.3, 0, 0.08, 2.5, 0.08).rotation.z = Math.PI / 2;
+      part(gt, GEO.ball, redMat, -1.6, 2.78, 0, 0.12, 0.12, 0.12); part(gt, GEO.ball, redMat, 1.6, 2.78, 0, 0.12, 0.12, 0.12);
+      gt.position.set(Math.cos(a) * 2.8, TOP, Math.sin(a) * 2.8); gt.rotation.y = -a + Math.PI / 2; g.add(gt);
+    },
+    cairn:function(g){
+      var a = rnd() * 6.28, x = Math.cos(a) * 2.7, z = Math.sin(a) * 2.7, y = TOP;
+      for(var i=0;i<5;i++){ var sc = 0.62 - i * 0.1, hh = sc * 0.42;
+        part(g, stoneGeo, stoneMat(), x + (rnd() - 0.5) * 0.08, y + hh, z + (rnd() - 0.5) * 0.08, sc, hh, sc * 0.9).rotation.y = rnd() * 6; y += hh * 1.75; }
+    },
+    stones:function(g){
+      for(var i=0;i<7;i++){ var a = i * 0.897 + 0.2, h = 1.2 + rnd() * 0.6;
+        var m = part(g, stoneGeo, mossMat, Math.cos(a) * 3.3, TOP + h * 0.8, Math.sin(a) * 3.3, 0.36, h, 0.28); m.rotation.y = -a; m.rotation.z = (rnd() - 0.5) * 0.14; }
+    }
+  };
+  var VARIANTS = {rock:['Heron Rock','Otter Rock','Grey Shoal'], bare:['Quiet Bar','Pale Shoal','Still Key'], gate:['The Red Gate','Gate Isle','Vermilion Key'],
+                  cairn:['Cairn Isle','The Stack','Marker Rock'], stones:['The Seven Stones','Ring Isle','Old Watch']};
+  function makeIsland(x, z, n, v){
+    var R = 5, g = new THREE.Group(), kind = KINDS[n % KINDS.length];
+    part(g, landGeo(R - 0.4, 2.2), sandMat, 0, 0.4 - 0.5, 0, 1, 0.5, 1);
+    g.add(halo(R + 4));
+    BUILD[kind](g);
+    var la = rnd() * 6.28, lx = Math.cos(la) * 3.7, lz = Math.sin(la) * 3.7;
+    part(g, GEO.cyl, trunkMat, lx, TOP + 0.95, lz, 0.045, 1.9, 0.045);
+    part(g, new THREE.SphereGeometry(0.17, 12, 8), new THREE.MeshBasicMaterial({color:0xffe2a6, fog:false}), lx, TOP + 1.95, lz, 1, 1, 1);
+    var beamMat = new THREE.MeshBasicMaterial({color:0xffe6b4, transparent:true, opacity:0.2, fog:false, depthWrite:false, side:THREE.DoubleSide});
+    part(g, new THREE.CylinderGeometry(0.22, 0.22, 70, 10, 1, true), beamMat, lx, 37, lz, 1, 1, 1);
+    g.position.set(x, 0, z); scene.add(g);
+    var isl = {x:x, z:z, R:R, top:0.42, name:VARIANTS[kind][v % 3], group:g, beamMat:beamMat, visited:false};
+    islands.push(isl);
+    return isl;
+  }
+  function h2(i, j, k){ var v = Math.sin(i * 127.1 + j * 311.7 + k * 74.7) * 43758.5453; return v - Math.floor(v); }
+
+  /* ---------- boats ---------- */
+  var woodDark = lam(0x4e4038), woodDeck = lam(0xb9a184), sailMat = lam(0xece5d3), cabinMat = lam(0xd8d3c6), hullBlue = lam(0x3f5a70), hullRed = lam(0x8a4a40);
+  var deckGeo = new THREE.CylinderGeometry(1, 1, 1, 28), bulbGeo = new THREE.SphereGeometry(1, 10, 8);
+  var bulbMat = new THREE.MeshBasicMaterial({color:0xffe2a6, fog:false});
+  var haloGlowMat = new THREE.MeshBasicMaterial({map:glowTex, color:0xffd9a0, transparent:true, opacity:0.85, blending:THREE.AdditiveBlending, depthWrite:false, fog:false, side:THREE.DoubleSide});
+  var glowPlane = new THREE.PlaneGeometry(1, 1);
+  // a lamp: a small bright bulb in a soft pool of light you can see from far off
+  function lamp(g, x, y, z, size){
+    part(g, bulbGeo, bulbMat, x, y, z, 0.11, 0.11, 0.11);
+    part(g, glowPlane, haloGlowMat, x, y, z, size, size, size);
+    part(g, glowPlane, haloGlowMat, x, y, z, size, size, size).rotation.y = Math.PI / 2;
+  }
+  var BOATS = {
+    skiff:{R:2.4, top:0.46, names:['The Minnow','Little Wren','Driftwood','Pip','The Cork'], build:function(g){
+      part(g, GEO.ball, woodDark, 0, 0.08, 0, 2.0, 0.6, 3.0); part(g, deckGeo, woodDeck, 0, 0.42, 0, 1.75, 0.07, 2.7);
+      part(g, GEO.cyl, woodDark, 0, 1.45, -2.2, 0.04, 2.0, 0.04); lamp(g, 0, 2.5, -2.2, 2.6); }},
+    sloop:{R:2.8, top:0.51, names:['Evening Star','The Marlowe','Kittiwake','Saltwind','Halcyon'], build:function(g){
+      part(g, GEO.ball, hullBlue, 0, 0.1, 0, 2.3, 0.7, 4.2); part(g, deckGeo, woodDeck, 0, 0.47, 0, 2.0, 0.07, 3.8);
+      part(g, GEO.cyl, woodDark, 0, 3.25, -2.8, 0.07, 5.5, 0.07); part(g, GEO.ball, sailMat, 0, 3.5, -1.7, 0.05, 2.3, 1.3);
+      lamp(g, 0, 6.1, -2.8, 3.2); }},
+    trawler:{R:3.4, top:0.61, names:['Northern Lass','The Petrel','Lantern Fish','Night Heron','Old Faithful'], build:function(g){
+      part(g, GEO.ball, hullRed, 0, 0.1, 0, 3.0, 0.95, 6.0); part(g, deckGeo, woodDeck, 0, 0.57, 0, 2.7, 0.08, 5.5);
+      part(g, GEO.ball, cabinMat, 0, 1.5, 3.6, 1.25, 1.0, 1.4); part(g, GEO.cyl, woodDark, 0, 2.8, -3.8, 0.07, 4.5, 0.07);
+      lamp(g, 0, 5.1, -3.8, 3.6);
+      for(var i=1;i<6;i++){ var u = i / 6; part(g, bulbGeo, bulbMat, 0, 5.0 - 2.3 * u - Math.sin(u * Math.PI) * 0.5, -3.8 + 7.2 * u, 0.06, 0.06, 0.06); }
+      lamp(g, 0, 2.6, 3.4, 1.8); }}
+  };
+  function makeBoat(x, z, k){
+    var night = P.star > 0.45, r = h2(k, 11, 5);
+    var type = night ? (r < 0.65 ? 'trawler' : r < 0.85 ? 'sloop' : 'skiff') : (r < 0.5 ? 'skiff' : r < 0.9 ? 'sloop' : 'trawler');
+    var B = BOATS[type], g = new THREE.Group();
+    B.build(g);
+    g.rotation.y = h2(k, 13, 6) * 6.28; g.position.set(x, 0, z); scene.add(g);
+    var b = {x:x, z:z, R:B.R, top:B.top, name:B.names[Math.floor(h2(k, 5, 4) * B.names.length)], group:g, beamMat:{opacity:0}, visited:false, boat:true};
+    islands.push(b);
+    return b;
+  }
+
+  /* ---------- the crossing: out to the far shore, and back ---------- */
+  var HOMEC = {coast:true, side:1, edge:1.5, top:0.06, R:0, name:'The home shore', beamMat:{opacity:0}, visited:true};
+  var FARC = {coast:true, side:-1, edge:-CROSS - 1.5, top:0.06, R:0, name:'The far shore', beamMat:{opacity:0}, visited:true};
+  function coastAt(z){ if(S.dir > 0 && z < FARC.edge) return FARC; if(S.dir < 0 && z > HOMEC.edge) return HOMEC; return null; }
+  function shoreDist(z){ return Math.max(0, Math.min(-z, CROSS + z)); }
+  // Things to rest on come one after another along the way: bare islands in the shallows near either
+  // shore, boats out on the open water. Each is built as you approach and let go once it is well behind.
+  var spawnZ = -53, spawnK = 0;
+  function ensureIslands(){
+    var dir = S.dir, guard = 0;
+    while((dir > 0 ? spawnZ > S.pos.z - 170 : spawnZ < S.pos.z + 170) && guard++ < 8){
+      var k = spawnK++;
+      if(spawnZ < -45 && spawnZ > -CROSS + 45){
+        var x = k === 0 ? 9 : S.pos.x + (h2(k, 7, 1) - 0.5) * 34;
+        if(shoreDist(spawnZ) < 260) makeIsland(x, spawnZ, k === 0 ? 0 : Math.floor(h2(k, 3, 3) * 5), Math.floor(h2(k, 5, 4) * 3));
+        else makeBoat(x, spawnZ, k);
+      }
+      spawnZ -= dir * (70 + h2(k, 9, 2) * 45);
+    }
+    for(var i=islands.length-1;i>=0;i--){
+      if((islands[i].z - S.pos.z) * dir > 90){ scene.remove(islands[i].group); islands.splice(i, 1); }
+    }
+  }
+  ensureIslands();
+  function islandAt(x, z, margin, skip){
+    var cst = coastAt(z); if(cst && cst !== skip) return cst;
+    for(var i=0;i<islands.length;i++){ var I = islands[i]; if(I === skip) continue; var dx = x - I.x, dz = z - I.z, rr = I.R + margin; if(dx*dx + dz*dz < rr*rr) return I; }
+    return null;
+  }
+  // an island close enough to step onto without a throw
+  function nearIsland(){
+    if(!hopOn) return null;
+    if(S.dir > 0 && S.pos.z > FARC.edge && S.pos.z - FARC.edge < 6) return FARC;
+    if(S.dir < 0 && S.pos.z < HOMEC.edge && HOMEC.edge - S.pos.z < 6) return HOMEC;
+    var best = null, bd = 7;
+    for(var i=0;i<islands.length;i++){ var I = islands[i], dx = S.pos.x - I.x, dz = S.pos.z - I.z, d = Math.sqrt(dx*dx + dz*dz) - I.R; if(d > 0.3 && d < bd){ bd = d; best = I; } }
+    return best;
+  }
+  function shoreSpot(I, out){
+    if(I.coast) return out.set(S.pos.x, I.top, I.edge + I.side * 2.5);
+    var dx = S.pos.x - I.x, dz = S.pos.z - I.z, d = Math.sqrt(dx*dx + dz*dz) || 1;
+    return out.set(I.x + dx / d * (I.R - 1.5), I.top, I.z + dz / d * (I.R - 1.5));
+  }
+  function stepToIsland(I, sm){
+    var sp = shoreSpot(I, new V3()), dx = sp.x - S.pos.x, dz = sp.z - S.pos.z;
+    var st = makeStone(sp.x, sp.z, 0.5, Math.sqrt(dx*dx + dz*dz), Math.atan2(-dx, -dz), 0);
+    st.shore = true; st.u = 1; st.top.y = I.top; st.island = I;
+    hand.visible = false; S.mode = 'walk'; S.landT = time - 1;
+    hop(sm);
+  }
+
+  /* ---------- fish and birds ---------- */
+  var fish = new THREE.Mesh(stoneGeo, soft(0xb7c3cc));
+  fish.scale.set(0.26, 0.075, 0.05); fish.visible = false; scene.add(fish);
+  var fishJ = null, nextFish = 7, nextCall = 11;
+  var birdMat = new THREE.MeshBasicMaterial({color:0x2b3144, side:THREE.DoubleSide});
+  var wingGeo = new THREE.BufferGeometry();
+  wingGeo.setAttribute('position', new THREE.Float32BufferAttribute([0,0,-0.16, 0,0,0.14, 0.62,0,0.04], 3));
+  var birds = [], birdC = new V3();
+  for(var bi=0;bi<5;bi++){
+    var bg = new THREE.Group(), wr = new THREE.Mesh(wingGeo, birdMat), wl = new THREE.Mesh(wingGeo, birdMat);
+    wl.scale.x = -1; bg.add(wr); bg.add(wl); scene.add(bg);
+    birds.push({g:bg, r:wr, l:wl, a:Math.random() * 6.28, rad:22 + Math.random() * 45, h:7 + Math.random() * 12,
+                w:(0.12 + Math.random() * 0.1) * (Math.random() < 0.5 ? -1 : 1), ph:Math.random() * 6});
+  }
+  var ocean = 0, storm = 0, tmpC = C(0);
+  function smooth(a, b, x){ x = clamp((x - a) / (b - a), 0, 1); return x * x * (3 - 2 * x); }
+  var RAIN = 420, rOff = new Float32Array(RAIN * 3), rPos = new Float32Array(RAIN * 6), rainGeo = new THREE.BufferGeometry();
+  for(var ri=0;ri<RAIN;ri++){ rOff[ri*3] = (Math.random() - 0.5) * 26; rOff[ri*3+1] = Math.random() * 12; rOff[ri*3+2] = (Math.random() - 0.5) * 26; }
+  rainGeo.setAttribute('position', new THREE.BufferAttribute(rPos, 3));
+  var rain = new THREE.LineSegments(rainGeo, new THREE.LineBasicMaterial({color:0xd3dbe6, transparent:true, opacity:0, fog:false, depthWrite:false}));
+  rain.frustumCulled = false; rain.visible = false; scene.add(rain);
+  // Where you are on the crossing decides the water and the weather: calm shallows near either shore,
+  // deep blue swell in between, and now and then a squall to walk through.
+  function worldUpdate(dt){
+    var d0 = Math.max(0, -S.pos.z);
+    ocean = smooth(120, 520, shoreDist(S.pos.z));
+    var sTarget = ocean * smooth(0.62, 0.92, Math.sin(d0 * 6.2832 / 1700 - 1.2 + S.legs * 1.9));
+    storm += (sTarget - storm) * Math.min(1, dt * 0.25);
+    sea += (ocean * (0.32 + 0.6 * storm) - sea) * Math.min(1, dt * 0.3);
+    P.water.lerp(P.deep, ocean * 0.78);
+    if(storm > 0.003){
+      var dim = 1 - 0.8 * P.star;
+      tmpC.setRGB(0.30 * dim, 0.34 * dim, 0.40 * dim); P.top.lerp(tmpC, storm * 0.75);
+      tmpC.setRGB(0.52 * dim, 0.56 * dim, 0.61 * dim); P.hor.lerp(tmpC, storm * 0.7);
+      tmpC.setRGB(0.10 * dim, 0.16 * dim, 0.22 * dim); P.water.lerp(tmpC, storm * 0.5);
+      P.sun.multiplyScalar(1 - 0.65 * storm); P.light *= 1 - 0.3 * storm; P.star *= 1 - storm;
+    }
+    S.flash *= Math.exp(-7 * dt);
+    if(storm > 0.6 && !reduceMotion && Math.random() < dt * 0.06){ S.flash = 1; setTimeout(rumble, 1500 + Math.random() * 2500); }
+    if(S.flash > 0.01){ var fl = 0.22 * S.flash; P.top.r += fl; P.top.g += fl; P.top.b += fl; P.hor.r += fl; P.hor.g += fl; P.hor.b += fl; }
+    scene.fog.density = 0.017 * (1 - 0.45 * ocean) + 0.011 * storm;
+    var ridgeAmt = Math.max(0.001, 1 - ocean);
+    ridgeFar.scale.y = ridgeNear.scale.y = ridgeAmt; ridgeFar.visible = ridgeNear.visible = ridgeAmt > 0.01;
+    skyU.uRidge.value = waterU.uRidge.value = ridgeAmt; waterU.uSea.value = sea;
+    shore.position.x = shoreHalo.position.x = farShore.position.x = farHalo.position.x = S.pos.x;
+    for(var i=0;i<islands.length;i++){
+      var I = islands[i]; if(!I.boat) continue;
+      I.group.position.y = swellAt(I.x, I.z, time);
+      I.group.rotation.z = (swellAt(I.x + 1.5, I.z, time) - swellAt(I.x - 1.5, I.z, time)) * 0.22;
+      I.group.rotation.x = (swellAt(I.x, I.z - 1.5, time) - swellAt(I.x, I.z + 1.5, time)) * 0.22;
+    }
+    rain.visible = storm > 0.03;
+    if(rain.visible){
+      rain.material.opacity = storm * 0.38;
+      for(var r=0;r<RAIN;r++){
+        var k = r * 3; rOff[k+1] -= 17 * dt; rOff[k] += 3 * dt;
+        if(rOff[k+1] < -1){ rOff[k+1] += 12; rOff[k] = (Math.random() - 0.5) * 26; rOff[k+2] = (Math.random() - 0.5) * 26; }
+        var x = eye.x + rOff[k], y = rOff[k+1] + 0.3, z = eye.z + rOff[k+2], o = r * 6;
+        rPos[o] = x; rPos[o+1] = y; rPos[o+2] = z; rPos[o+3] = x - 0.11; rPos[o+4] = y + 0.62; rPos[o+5] = z;
+      }
+      rainGeo.attributes.position.needsUpdate = true;
+    }
+    if(ambG){ ambG.gain.value = 0.005 + 0.012 * ocean + 0.03 * storm; rainG.gain.value = storm * 0.03; }
+  }
+  // dolphins that run alongside for a while, and now and then a whale
+  var dolMat = soft(0x71879b), dolphins = [], pod = null, nextPod = 35;
+  for(var dq=0;dq<4;dq++){
+    var dg = new THREE.Group();
+    part(dg, GEO.ball, dolMat, 0, 0, 0, 0.2, 0.2, 0.9); part(dg, GEO.ball, dolMat, 0, 0.2, 0.1, 0.03, 0.13, 0.14); part(dg, GEO.ball, dolMat, 0, 0, 0.92, 0.2, 0.03, 0.11);
+    dg.visible = false; scene.add(dg); dolphins.push({g:dg, up:false});
+  }
+  var whale = new THREE.Mesh(GEO.ball, soft(0x2c3a4a)), whaleEv = null, nextWhale = 150;
+  whale.scale.set(1.8, 1.0, 6.5); whale.visible = false; scene.add(whale);
+  function creatures(dt){
+    if(!pod && ocean > 0.5 && time > nextPod){
+      var side = Math.random() < 0.5 ? -1 : 1;
+      pod = {x:S.pos.x + side * (2.5 + Math.random() * 2), z:S.pos.z + S.dir * 6, dir:S.dir, side:side, t:0, dur:11};
+    }
+    if(pod){
+      pod.t += dt;
+      for(var i=0;i<dolphins.length;i++){
+        var dl = dolphins[i], ph = pod.t * 0.6 + i * 0.29, cyc = ph - Math.floor(ph), up = cyc < 0.5 && pod.t < pod.dur;
+        var z = pod.z - pod.dir * (6.2 * pod.t - i * 1.7), x = pod.x + pod.side * i * 0.8;
+        dl.g.visible = up;
+        if(up){
+          dl.g.position.set(x, swellAt(x, z, time) - 0.25 + Math.sin(Math.PI * cyc / 0.5) * 1.0, z);
+          dl.g.rotation.set(pod.dir * Math.cos(Math.PI * cyc / 0.5) * 0.85, pod.dir > 0 ? 0 : Math.PI, 0);
+        }
+        if(up !== dl.up){ dl.up = up; ripple(x, z, 0.7); if(!up && pod.t < pod.dur){ splash(x, z, 0.5); plop(0.4, 0.1); } }
+      }
+      if(pod.t > pod.dur + 1){ pod = null; nextPod = time + 45 + Math.random() * 70; }
+    }
+    if(!whaleEv && ocean > 0.7 && storm < 0.3 && time > nextWhale){
+      var ws = Math.random() < 0.5 ? -1 : 1;
+      whaleEv = {x:S.pos.x + ws * (5 + Math.random() * 4), z:S.pos.z - S.dir * (30 + Math.random() * 14), dir:S.dir, t:0, dur:16, spout:false};
+      whaleSong();
+    }
+    if(whaleEv){
+      var W = whaleEv; W.t += dt;
+      var wu = W.t / W.dur, wz = W.z - W.dir * 2.2 * W.t, rise = Math.pow(Math.max(0, Math.sin(Math.PI * wu)), 0.7);
+      whale.visible = true; whale.position.set(W.x, swellAt(W.x, wz, time) - 1.35 + rise, wz); whale.rotation.x = W.dir * (0.5 - wu) * 0.25;
+      if(!W.spout && wu > 0.22){ W.spout = true; spark(W.x, 0.6, wz - W.dir * 4.5, 46, 0.5, 3.4); hiss(0.03, 1.4, 1100, 500); ripple(W.x, wz, 1.2); }
+      if(wu >= 1){ whale.visible = false; whaleEv = null; nextWhale = time + 150 + Math.random() * 200; ripple(W.x, wz, 1.0); }
+    }
+  }
+  function lifeUpdate(dt){
+    creatures(dt);
+    if(!fishJ && time > nextFish){
+      var fa = S.yaw + (Math.random() - 0.5) * 1.7, fd = 6 + Math.random() * 18;
+      fishJ = {x:S.pos.x - Math.sin(fa) * fd, z:S.pos.z - Math.cos(fa) * fd, dir:Math.random() * 6.28, t:0, dur:0.7 + Math.random() * 0.25};
+      ripple(fishJ.x, fishJ.z, 0.6); hiss(0.008, 0.16, 2200, 900); fish.visible = true;
+    }
+    if(fishJ){
+      fishJ.t += dt;
+      var u = fishJ.t / fishJ.dur, fx = fishJ.x + Math.cos(fishJ.dir) * u * 1.3, fz = fishJ.z + Math.sin(fishJ.dir) * u * 1.3;
+      fish.position.set(fx, -0.1 + swellAt(fx, fz, time) + 0.75 * 4 * u * (1 - u), fz);
+      fish.rotation.set(0, -fishJ.dir, (1 - 2 * u) * 1.0);
+      if(u >= 1){
+        fish.visible = false; ripple(fx, fz, 0.8); splash(fx, fz, 0.6); plop(0.7, 0.3);
+        disturb.push({x:fx, z:fz, t:time}); if(disturb.length > 6) disturb.shift();
+        fishJ = null; nextFish = time + 5 + Math.random() * 10;
+      }
+    }
+    birdC.lerp(S.pos, Math.min(1, dt * 0.15));
+    for(var i=0;i<birds.length;i++){
+      var b = birds[i]; b.a += b.w * dt;
+      b.g.position.set(birdC.x + Math.cos(b.a) * b.rad, b.h + Math.sin(time * 0.3 + b.ph) * 1.5, birdC.z + Math.sin(b.a) * b.rad);
+      var sg = b.w < 0 ? -1 : 1, mx = -Math.sin(b.a) * sg, mz = Math.cos(b.a) * sg;
+      b.g.rotation.y = Math.atan2(-mx, -mz);
+      var fl = reduceMotion ? 0.1 : Math.sin(time * 7 + b.ph) * 0.55 * Math.max(0.15, Math.sin(time * 0.5 + b.ph));
+      b.r.rotation.z = fl; b.l.rotation.z = -fl;
+    }
+    if(time > nextCall){
+      nextCall = time + 14 + Math.random() * 20;
+      chirp(2300, 2700, 0.008, 0.11); chirp(2700, 3050, 0.007, 0.12, 0.15);
+    }
+  }
+  function clamp(v, a, b){ return Math.max(a, Math.min(b, v)); }
+  function easeOutBack(u){ var c = 1.55; var x = u - 1; return 1 + (c + 1) * x*x*x + c * x*x; }
+  function angDiff(a, b){ var d = (a - b) % (Math.PI * 2); if(d > Math.PI) d -= Math.PI * 2; if(d < -Math.PI) d += Math.PI * 2; return d; }
+
+  /* ---------- water surface the stone actually meets ---------- */
+  var D = Math.PI / 180;
+  function waveAmp(x, z, t){
+    var gx = x - WDX * t * 1.2, gz = z - WDZ * t * 1.2, g = 0.5 + 0.5 * Math.sin(gx*0.021 + t*0.02) * Math.sin(gz*0.017 + 1.3);
+    return (0.018 + 0.04 * g * g) * (1 + sea * 1.2);
+  }
+  function waveH(x, z, t){
+    var h = 0;
+    for(var i=0;i<WAVES.length;i++){ var c = WAVES[i]; h += c.w / 1.5 * (2 * Math.pow(0.5 + 0.5 * Math.sin(c.kx*x + c.kz*z - c.om*t), 1.5) - 1); }
+    return h * waveAmp(x, z, t);
+  }
+  function waveSlope(x, z, t, dx, dz){
+    var sl = 0;
+    for(var i=0;i<WAVES.length;i++){ var c = WAVES[i], ph = c.kx*x + c.kz*z - c.om*t; sl += c.w * Math.sqrt(0.5 + 0.5 * Math.sin(ph)) * Math.cos(ph) * (c.kx*dx + c.kz*dz); }
+    return sl * waveAmp(x, z, t);
+  }
+  var disturb = [];
+
+  // p: {ang, sn (flick speed 0..1), hn (release height 0..1), bend (curve of the flick, radians)}
+  function throwStone(p){
+    if(!(S.mode === 'aim' || S.mode === 'walk') || (S.flight && S.flight.sink < 0)) return;
+    S.yaw += S.look; S.look = 0; S.heading = S.yaw;
+    var keep = S.hop ? S.idx + 2 : S.idx + 1;          // keep only the one you are standing on or flying to
+    if(stones.length > keep) stones.length = keep;
+    var base = S.hop ? S.hop.to : S.pos;
+    S.mode = 'flight'; S.lookHold = false; S.throws++; S.preview = null;
+    titleEl.classList.add('gone'); setHint('');
+    var from = new V3(); hand.getWorldPosition(from);
+    hand.visible = false; pebble.visible = true; pebble.position.copy(from);
+    var th = S.fwd + clamp(angDiff(S.heading - p.ang, S.fwd), -1.1, 1.1), v = 4.5 + 10.5 * p.sn, el = (-10 + 26 * p.hn) * D, y0 = 0.5 + 0.8 * p.hn + swellAt(S.pos.x, S.pos.z, time);
+    S.batch = stones.length;
+    S.flight = {
+      x:from.x, y:y0, z:from.z,
+      vx:-Math.sin(th) * Math.cos(el) * v, vy:Math.sin(el) * v, vz:-Math.cos(th) * Math.cos(el) * v,
+      spin:(2 + 4 * p.sn) + Math.min(10, Math.abs(p.bend) * 9),   // turns per second
+      sgn:p.bend < 0 ? -1 : 1,
+      alpha:20 * D + (Math.random() - 0.5) * 4 * D,                 // tilt of the stone's face to the water
+      vis:from.y - y0, home:islandAt(S.pos.x, S.pos.z, 0.2), k:0, n:0, sink:-1, age:0, lx:base.x, lz:base.z, base:Math.floor(Math.random() * 4)
+    };
+    hiss(0.03 + p.sn * 0.03, 0.34, 400, 1100);
+  }
+  function beginRise(){
+    S.mode = 'rising';
+  }
+  function sinkStone(F){
+    F.sink = 0; S.lastSkips = F.k; S.skipT = time;
+    ripple(F.x, F.z, 0.9); splash(F.x, F.z, 0.9); plop(0.5);
+    if(stones.length > S.batch) beginRise();
+  }
+  function landShore(F, I){
+    var dx = F.x - I.x, dz = F.z - I.z, d = Math.sqrt(dx*dx + dz*dz) || 1, m = Math.min(d, I.R - 1.4);
+    var x = I.x + dx / d * m, z = I.z + dz / d * m;
+    if(I.coast){ x = F.x; z = I.edge + I.side * 2.5; }
+    if(hopOn){
+      var st = makeStone(x, z, 0.5, Math.sqrt((x-F.lx)*(x-F.lx) + (z-F.lz)*(z-F.lz)), Math.atan2(-F.vx, -F.vz), F.base + F.n);
+      st.shore = true; st.u = 1; st.top.y = I.top; st.island = I;
+    }
+    S.lastSkips = F.k; S.skipT = time;
+    tone(190, 0.08, 0.16, 'triangle'); hiss(0.02, 0.1, 2400, 1200); bell(F.base + F.n, 0.08, false);
+    F.sink = 0; pebble.visible = false;
+    beginRise();
+  }
+  // One touch on the water. Follows the skipping-stone experiments: the stone rebounds only above a
+  // minimum speed that is lowest when its face is tilted about 20 degrees to the surface, never past
+  // about 45 degrees, and spin is what holds that tilt steady from one skip to the next.
+  function contact(F){
+    var hit = islandAt(F.x, F.z, 0.7, F.home);
+    if(hit){ landShore(F, hit); return; }
+    var vh = Math.sqrt(F.vx*F.vx + F.vz*F.vz), vyIn = -F.vy;
+    if(vh < 0.3){ sinkStone(F); return; }
+    var dx = F.vx / vh, dz = F.vz / vh;
+    var slope = waveSlope(F.x, F.z, time, dx, dz);
+    for(var i=0;i<disturb.length;i++){
+      var ds = disturb[i];
+      if(time - ds.t < 6 && (F.x-ds.x)*(F.x-ds.x) + (F.z-ds.z)*(F.z-ds.z) < 9) slope += (Math.random() - 0.5) * 0.25;
+    }
+    var phi = Math.atan(slope);
+    var wobble = Math.max(0, 1 - F.spin / 6);                 // under about 6 turns a second the tilt wanders
+    F.alpha += (Math.random() - 0.5) * 2 * wobble * 0.5;
+    var a = F.alpha - phi, b = Math.max(0, Math.atan2(vyIn, vh) + phi);
+    var q = Math.exp(-Math.pow((a - 20 * D) / (16 * D), 2));
+    var vmin = 2.5 * (1 + Math.pow((a - 20 * D) / (20 * D), 2)) * (1 + Math.pow(b / (38 * D), 2));
+    var vh2 = vh - (0.5 + 1.4 * (1 - q) + 1.5 * Math.tan(b));
+    if(!(a > 3 * D && a < 48 * D && b < 45 * D && Math.sqrt(vh*vh + vyIn*vyIn) > vmin && vh2 > 1)){ sinkStone(F); return; }
+    // spin makes the path hook, more as the stone slows
+    var hook = -F.sgn * 0.0045 * F.spin / Math.max(vh2, 2) * 6;
+    var c = Math.cos(hook), sn = Math.sin(hook);
+    var nx = dx * c - dz * sn * -1, nz = dz * c + dx * sn * -1;
+    F.vx = nx * vh2; F.vz = nz * vh2; F.vy = vyIn * (0.6 + 0.27 * q);
+    F.y = waveH(F.x, F.z, time) + swellAt(F.x, F.z, time) + 0.03; F.spin *= 0.9;
+    var s = clamp(vh / 11, 0.15, 1), gapFrom = Math.sqrt((F.x-F.lx)*(F.x-F.lx) + (F.z-F.lz)*(F.z-F.lz));
+    if(F.n === 0 || gapFrom >= 1.1){
+      if(hopOn) makeStone(F.x, F.z, clamp(0.4 + vh * 0.028, 0.42, 0.7), gapFrom, Math.atan2(-F.vx, -F.vz), F.base + F.n);
+      bell(F.base + F.n, 0.09 + 0.08 * s, false);
+      F.n++; F.lx = F.x; F.lz = F.z;
+    }else bell(F.base + F.n, 0.05, false);
+    ripple(F.x, F.z, 0.5 + 0.7 * s); splash(F.x, F.z, 0.3 + 0.9 * s); hiss(0.012 + 0.03 * s, 0.14, 1800, 900);
+    F.k++;
+  }
+
+  // sm 0..1: how gently the tap was pressed. Gentle presses glide lower and slower.
+  function hop(sm){
+    if(!hopOn || !(S.mode === 'walk' || S.mode === 'flight') || S.hop) return;
+    var n = stones[S.idx + 1];
+    if(!n || n.u < 0.95) return;
+    if(sm === undefined) sm = 0.45;
+    var cur = stones[S.idx]; if(cur) cur.leaving = true;
+    var ph = ((time - S.landT) % PERIOD) / PERIOD;
+    var grace = (time - S.landT > 0.25) && (ph > 0.76 || ph < 0.1);
+    S.hop = {from:S.pos.clone(), to:n.top.clone(), t:0, dur:(0.62 + n.gap * 0.065) * (1 + 0.65 * sm), h:(0.2 + n.gap * 0.06) * (1 - 0.55 * sm), grace:grace, sm:sm, nb:1, b:0, note:n.note};
+    if(n.gap > MAXHOP){
+      // too far for one hop: cross it the way the stone did, in a run of low skims
+      var nb = Math.ceil(n.gap / 5), L = n.gap / nb;
+      S.hop.nb = nb; S.hop.dur = nb * (0.44 + L * 0.04) * (1 + 0.4 * sm); S.hop.h = (0.15 + L * 0.03) * (1 - 0.4 * sm);
+      S.skims++;
+    }
+  }
+
+  function land(){
+    var h = S.hop, n = stones[S.idx + 1];
+    S.hop = null; S.pos.copy(h.to); S.idx++; S.hops++; S.landT = time;
+    S.dayT += 0.0035;
+    n.bob = 1;
+    if(n.shore){ arrive(n); return; }
+    if(h.grace){
+      S.streak++; S.graces++;
+      ripple(n.x, n.z, 1.15); ripple(n.x, n.z, 0.7, 0.28);
+      bell(n.note, 0.17, true);
+      if(S.streak > 0 && S.streak % 5 === 0) bell(n.note + 2, 0.07, false);
+      n.glowTarget = 1; S.dipA = 0.022 * (1 - 0.8 * h.sm); spark(n.x, 0.2, n.z, 12, n.r * 2, 1.2);
+    }else{
+      S.streak = 0;
+      ripple(n.x, n.z, 0.7);
+      bell(n.note, 0.1, false);
+      n.glowTarget = 0.22; S.dipA = 0.045 * (1 - 0.8 * h.sm);
+    }
+    if(S.idx === stones.length - 1){
+      if(stones.length > 70 && S.idx > 45){
+        var gone = stones.splice(0, 24);
+        S.idx -= 24; S.batch = Math.max(0, S.batch - 24);
+      }
+    }
+  }
+  var PERIOD = 0.85;
+
+  function arrive(n){
+    var here = n.island, first = !here.visited;
+    if(here.coast){
+      // the end of a leg: turn round, and the way back is a new crossing
+      S.legs++; S.dir = -S.dir; S.fwd = S.dir > 0 ? 0 : Math.PI; S.heading = S.fwd; S.look = 0;
+      for(var ci=islands.length-1;ci>=0;ci--) scene.remove(islands[ci].group);
+      islands.length = 0; spawnZ = n.z - S.dir * 60; hudT = 0;
+      spark(n.x, 0.6, n.z, 40, 4, 1.5);
+      bell(0, 0.12, true); setTimeout(function(){ bell(2, 0.1, false); }, 350); setTimeout(function(){ bell(4, 0.1, true); }, 700); setTimeout(function(){ bell(7, 0.09, true); }, 1100);
+      S.dayT += 0.03; S.streak = 0; S.arrived = here.name + '. The way back is open.';
+      S.stroll = {a:S.pos.clone(), mid:n.top.clone(), to:n.top.clone(), t:0, d1:1.6, d2:0.01, d3:4.5, rest:0};
+      S.pan = 0; S.mode = 'stroll';
+      return;
+    }
+    if(first){
+      here.visited = true; reached++;
+      spark(n.x, 0.6, n.z, 36, 3, 1.5);
+      bell(0, 0.12, true);
+      setTimeout(function(){ bell(2, 0.1, false); }, 300);
+      setTimeout(function(){ bell(4, 0.1, true); }, 600);
+      S.dayT += 0.02;
+    }
+    here.beamMat.opacity = 0.05; hudT = 0;
+    S.streak = 0; S.arrived = here.name;
+    // carry on across the island in the direction you came
+    var to = new V3(here.x - Math.sin(n.theta) * (here.R - 1.4), here.top, here.z - Math.cos(n.theta) * (here.R - 1.4));
+    S.stroll = {a:S.pos.clone(), mid:new V3(here.x, here.top, here.z), to:to, t:0, d1:2.8, d2:0.01, d3:2.8, rest:0};
+    S.pan = 0;
+    S.mode = 'stroll';
+  }
+
+  /* ---------- input ---------- */
+  var ptr = null, viewHalfW = 0.2, viewHalfH = 0.4, grabPos = new V3();
+  function fingerToHand(x, y){
+    grabPos.set((x / window.innerWidth * 2 - 1) * viewHalfW, -(y / window.innerHeight * 2 - 1) * viewHalfH + 0.035, -0.55);
+  }
+  function overStone(x, y){
+    hand.getWorldPosition(tmp); tmp.project(camera);
+    var sx = (tmp.x + 1) / 2 * window.innerWidth, sy = (1 - tmp.y) / 2 * window.innerHeight;
+    return (x - sx) * (x - sx) + (y - sy) * (y - sy) < 105 * 105;
+  }
+  // flick speed is the stone's speed, release height is how flat or lofted it leaves,
+  // flick direction is the heading, and a curve at the end of the flick is spin
+  function flickParams(p, x, y, now){
+    var H = window.innerHeight, sm = p.samples, a = null, vx = 0, vy = 0, bend = 0;
+    for(var i=0;i<sm.length;i++){ if(now - sm[i].t <= 120 && now - sm[i].t > 8){ a = sm[i]; break; } }
+    if(!a){ for(var j=sm.length-1;j>=0;j--){ var dtj = now - sm[j].t; if(dtj > 8){ if(dtj <= 200) a = sm[j]; break; } } }
+    if(a){ vx = (x - a.x) / (now - a.t); vy = (y - a.y) / (now - a.t); }
+    var sn = clamp(Math.sqrt(vx*vx + vy*vy) / (H * 0.0034), 0, 1);
+    var hn = clamp((p.y - y) / (H * 0.5), 0, 1);
+    if(sm.length >= 3 && now - sm[0].t <= 230){
+      var o = sm[0], m = sm[Math.floor(sm.length / 2)];
+      var l0 = Math.sqrt((m.x-o.x)*(m.x-o.x) + (m.y-o.y)*(m.y-o.y)), l1 = Math.sqrt((x-m.x)*(x-m.x) + (y-m.y)*(y-m.y));
+      if(l0 > 12 && l1 > 12) bend = clamp(angDiff(Math.atan2(x - m.x, -(y - m.y)), Math.atan2(m.x - o.x, -(m.y - o.y))), -1.4, 1.4);
+      if(Math.abs(bend) < 0.08) bend = 0;
+    }
+    return {ang:clamp(Math.atan2(vx, -vy), -0.9, 0.9), sn:sn, hn:hn, bend:bend, none: sn < 0.07 || vy >= 0};
+  }
+  canvas.addEventListener('pointerdown', function(e){
+    audioInit();
+    var now = e.timeStamp || performance.now();
+    ptr = {x:e.clientX, y:e.clientY, t:now, lx:e.clientX, look:false, grab:false, samples:[{x:e.clientX, y:e.clientY, t:now}]};
+    if((S.mode === 'aim' || S.mode === 'walk') && hand.visible && overStone(e.clientX, e.clientY)){ ptr.grab = true; fingerToHand(e.clientX, e.clientY); tone(freq(0) / 2, 0.03, 0.25); }
+    try{ canvas.setPointerCapture(e.pointerId); }catch(err){}
+  });
+  canvas.addEventListener('pointermove', function(e){
+    if(!ptr) return;
+    var now = e.timeStamp || performance.now(), dx = e.clientX - ptr.x, dy = e.clientY - ptr.y;
+    ptr.samples.push({x:e.clientX, y:e.clientY, t:now});
+    while(ptr.samples.length > 2 && now - ptr.samples[0].t > 200) ptr.samples.shift();
+    if(ptr.grab){
+      fingerToHand(e.clientX, e.clientY);
+    }else{
+      if(!ptr.look && dx*dx + dy*dy > 12*12) ptr.look = true;
+      if(ptr.look){ var relY = angDiff(S.yaw, S.fwd); S.look = clamp(S.look + (e.clientX - ptr.lx) * 0.005, -0.9 - relY, 0.9 - relY); }
+    }
+    ptr.lx = e.clientX;
+  });
+  canvas.addEventListener('pointerup', function(e){
+    audioInit();
+    if(!ptr) return;
+    var p = ptr; ptr = null; S.preview = null;
+    if(p.grab){
+      if(!(S.mode === 'aim' || S.mode === 'walk')) return;
+      var fp = flickParams(p, e.clientX, e.clientY, e.timeStamp || performance.now());
+      if(fp.none){ S.noneT = time; S.aimSince = time; }
+      else throwStone(fp);
+      return;
+    }
+    if(p.look) return;
+    if(S.mode === 'walk' || S.mode === 'flight') hop(clamp(((e.timeStamp || performance.now()) - p.t - 80) / 320, 0, 1));
+    else if(S.mode === 'stroll' && S.stroll && S.stroll.t < S.stroll.d1 + S.stroll.d2){
+      var sw = S.stroll;
+      if(sw.t < sw.d1){ sw.mid.copy(S.pos); sw.rest = 0; } else sw.rest = angDiff(S.pan, 0);
+      sw.t = sw.d1 + sw.d2;
+    }
+    else if(S.mode === 'aim'){
+      var NI = nearIsland();
+      if(NI) stepToIsland(NI, clamp(((e.timeStamp || performance.now()) - p.t - 80) / 320, 0, 1));
+      else{ setHint(AIM_HINT); S.aimSince = time; }
+    }
+  });
+  canvas.addEventListener('pointercancel', function(){ ptr = null; S.preview = null; });
+  window.addEventListener('keydown', function(e){
+    if(e.code !== 'Space' && e.code !== 'ArrowUp' && e.code !== 'Enter') return;
+    if(e.target === soundBtn || e.target === modeBtn) return;
+    e.preventDefault(); audioInit();
+    if(S.mode === 'aim' && e.code === 'Enter' && nearIsland()) stepToIsland(nearIsland());
+    else if(S.mode === 'aim' || e.code === 'ArrowUp') throwStone({ang:0, sn:0.55 + Math.random() * 0.35, hn:0.2 + Math.random() * 0.2, bend:0.7});
+    else hop();
+  });
+
+  /* ---------- frame ---------- */
+  function resize(){
+    var w = window.innerWidth, h = window.innerHeight;
+    renderer.setSize(w, h, false);
+    camera.aspect = w / h; camera.fov = w < h ? 64 : 50; camera.updateProjectionMatrix();
+    var halfH = Math.tan(camera.fov * Math.PI / 360) * 0.55;
+    viewHalfH = halfH; viewHalfW = halfH * camera.aspect;
+    var hk = halfH / 0.478; hand.scale.set(0.066 * hk, 0.018 * hk, 0.055 * hk);
+    handBase.set(0, -halfH * 0.52, -0.55);
+  }
+  window.addEventListener('resize', resize); resize();
+
+  var eye = new V3(), tmp = new V3();
+  function update(dt){
+    S.dayT += dt * 0.0016;
+    palette(S.dayT); sunAt(S.dayT); worldUpdate(dt);
+
+    // what you can do right now follows from what is happening
+    var want = S.stroll ? 'stroll' : (S.flight && S.flight.sink < 0) ? 'flight' : (S.hop || stones[S.idx + 1]) ? 'walk' : 'aim';
+    if(want !== S.mode){
+      if(want === 'aim') S.aimSince = time;
+      if(want === 'walk'){ S.landT = time; S.dipA = 0; }
+      S.mode = want;
+    }
+    var showHand = want === 'aim' || want === 'walk';
+    if(showHand && !hand.visible){ hand.visible = true; handIn = 0; }
+    if(!showHand) hand.visible = false;
+
+    // stone in the air
+    var F = S.flight;
+    if(F){
+      if(F.sink < 0){
+        F.age += dt; F.vy -= 9.81 * dt;
+        F.x += F.vx * dt; F.y += F.vy * dt; F.z += F.vz * dt;
+        F.vis *= Math.exp(-14 * dt);
+        pebble.position.set(F.x, F.y + F.vis, F.z);
+        pebble.rotation.set(0.3, pebble.rotation.y - F.sgn * F.spin * 2.2 * dt, 0);
+        var onIsland = F.y < 0.55 ? islandAt(F.x, F.z, 0.3, F.home) : null;
+        if(onIsland) landShore(F, onIsland);
+        else if(F.vy < 0 && F.y <= waveH(F.x, F.z, time) + swellAt(F.x, F.z, time) + 0.02) contact(F);
+        else if(F.age > 14) sinkStone(F);
+      }else{
+        F.sink += dt; pebble.position.y -= dt * 1.2;
+        if(F.sink > 0.4){
+          pebble.visible = false; S.flight = null;
+          if(F.k === 0) S.sankT = time;
+        }
+      }
+    }
+    lifeUpdate(dt);
+    if(F && F.sink < 0 && !reduceMotion) spark(F.x, F.y + F.vis, F.z, 1, 0.05, 0.1);
+
+    // touch points settle in, glow, and fade once you have hopped off them
+    var mk = 0, blocked = false;
+    for(var i=0;i<stones.length;i++){
+      var st = stones[i];
+      if(st.u < 1){
+        if(!st.rippled){ st.rippled = true; if(!st.shore) spark(st.x, 0.08, st.z, 3, st.r, 0.6); }
+        st.u = Math.min(1, (time - st.riseStart) / 0.6);
+      }
+      st.glow += (st.glowTarget - st.glow) * Math.min(1, dt * 3);
+      if(st.leaving) st.fade = Math.max(0, st.fade - dt / 1.2);
+      var mw = st.shore ? 0 : st.u * st.fade * (blocked && i > S.idx ? 0.3 : 1);
+      if(mw > 0.01 && mk < MN && i >= S.idx - 2) marks[mk++].set(st.x, st.z, mw * (0.75 + 0.5 * st.glow));
+    }
+    for(;mk<MN;mk++) marks[mk].z = 0;
+    if(S.mode === 'rising' && stones[S.batch] && stones[S.batch].u >= 1){ S.mode = 'walk'; S.landT = time; }
+
+    // hop: eases out of standing and back into it, with no kick at either end.
+    // A long crossing is the same motion repeated: several low skims, each leaving a ripple.
+    if(S.hop){
+      var h = S.hop; h.t += dt;
+      var q = Math.min(1, h.t / h.dur), e = q * q * q * (q * (q * 6 - 15) + 10);
+      if(h.nb > 1) e = q + (e - q) * 0.45;
+      S.pos.lerpVectors(h.from, h.to, e);
+      var bp = e * h.nb, bi = Math.min(h.nb - 1, Math.floor(bp)), sq = Math.sin(Math.PI * (bp - bi));
+      if(bi > h.b){
+        h.b = bi;
+        ripple(S.pos.x, S.pos.z, 0.6); spark(S.pos.x, 0.08, S.pos.z, 2, 0.4, 0.5);
+        bell(h.note - (h.nb - bi), 0.05, false);
+      }
+      S.pos.y += h.h * sq * sq;
+      if(q >= 1) land();
+    }
+
+    // walk to the middle of the island, take a slow look all the way round, then cross to the far side
+    if(S.stroll){
+      var w = S.stroll; w.t += dt;
+      var t1 = w.d1, t2 = w.d1 + w.d2, wq;
+      if(w.t < t1){ wq = w.t / t1; S.pos.lerpVectors(w.a, w.mid, wq * wq * (3 - 2 * wq)); S.pan = 0; }
+      else if(w.t < t2){ wq = (w.t - t1) / w.d2; S.pos.copy(w.mid); S.pan = 0; }
+      else{ wq = Math.min(1, (w.t - t2) / w.d3); var we = wq * wq * (3 - 2 * wq); S.pos.lerpVectors(w.mid, w.to, we); S.pan = w.rest * (1 - we);
+        if(wq >= 1){ S.stroll = null; S.pan = 0; S.pos.copy(w.to); } }
+    }
+
+    // droplets
+    var any = false;
+    for(var d=0;d<DN;d++){
+      if(dLife[d] <= 0) continue; any = true;
+      var k = d * 3; dVel[k+1] -= 9 * dt;
+      dPos[k] += dVel[k] * dt; dPos[k+1] += dVel[k+1] * dt; dPos[k+2] += dVel[k+2] * dt;
+      if(dPos[k+1] < -1.3){ dLife[d] = 0; dPos[k+1] = -50; }
+    }
+    if(any) dropGeo.attributes.position.needsUpdate = true;
+
+    // the cue for the next hop: a soft ripple drawing in toward the touch point
+    var next = stones[S.idx + 1], nextW = 0;
+    ring.visible = false;
+    if((S.mode === 'walk' || S.mode === 'flight') && !S.hop && next && next.u >= 0.95){
+      var ph = ((time - S.landT) % PERIOD) / PERIOD;
+      if(next.shore){
+        var sc = 0.5 * (1.12 + 1.25 * (1 - ph));
+        ring.visible = true; ring.position.set(next.x, next.top.y + 0.04 + (next.island && next.island.boat ? next.island.group.position.y : 0), next.z);
+        ring.scale.set(sc, 1, sc); ring.material.opacity = 0.1 + 0.25 * ph;
+      }else{ waterU.uNext.value.set(next.x, next.z, next.r * (0.35 + 1.5 * (1 - ph)), nextW = 0.35 + 0.65 * ph); }
+    }else if(S.mode === 'aim' && nearIsland()){
+      var NI2 = nearIsland(); shoreSpot(NI2, tmp);
+      var rs = 0.62 + 0.07 * Math.sin(time * 3);
+      ring.visible = true; ring.position.set(tmp.x, tmp.y + 0.04 + (NI2.boat ? NI2.group.position.y : 0), tmp.z); ring.scale.set(rs, 1, rs); ring.material.opacity = 0.32;
+    }
+    waterU.uNext.value.w = nextW;
+    ensureIslands();
+
+    // landing preview
+    for(var v=0;v<PV;v++){
+      var q2 = (S.preview && S.mode === 'aim') ? S.preview.pts[v] : null;
+      pv[v].visible = !!q2;
+      if(q2){ var ps = v === 0 ? 0.4 : 0.24; pv[v].position.set(q2.x, q2.shore ? 0.46 : 0.04, q2.z); pv[v].scale.set(ps, 1, ps); }
+    }
+    pvMat.opacity = (S.preview && S.preview.weak) ? 0.3 : 0.75;
+
+    // camera
+    S.yaw += angDiff(S.heading, S.yaw) * Math.min(1, dt * 2.1);
+    S.pitch += (-0.12 - S.pitch) * Math.min(1, dt * 1.7);
+    var du = (time - S.landT) / 0.8; S.dip = du < 1 ? S.dipA * Math.sin(Math.PI * du) * (1 - du) * 1.7 : 0;
+    var breathe = reduceMotion ? 0 : Math.sin(time * 1.15) * 0.012;
+    eye.set(S.pos.x, S.pos.y + EYE + breathe - (reduceMotion ? 0 : S.dip) + swellAt(S.pos.x, S.pos.z, time), S.pos.z);
+    camera.position.copy(eye);
+    camera.rotation.set(S.pitch, S.yaw + S.look + S.pan, 0);
+
+    glowUpdate(dt);
+
+    // hand
+    handIn = Math.min(1, handIn + dt * 1.6);
+    var hi = handIn * handIn * (3 - 2 * handIn);
+    if(ptr && ptr.grab && (S.mode === 'aim' || S.mode === 'walk')){
+      hand.position.lerp(grabPos, Math.min(1, dt * 28));
+      hand.rotation.set(0.5, hand.rotation.y + dt * 1.2, 0);
+    }else{
+      tmp.set(handBase.x, handBase.y - 0.3 * (1 - hi) + Math.sin(time * 1.7) * 0.004, handBase.z);
+      if(hi < 1) hand.position.copy(tmp); else hand.position.lerp(tmp, Math.min(1, dt * 10));
+      hand.rotation.set(0.25, time * 0.25, 0.1);
+    }
+
+    // world follows the walker so the far shore stays far
+    sky.position.copy(eye); stars.position.set(eye.x, 0, eye.z);
+    ridgeFar.position.set(eye.x, 0, eye.z); ridgeNear.position.set(eye.x, 0, eye.z);
+    water.position.set(eye.x, 0, eye.z);
+
+    // colour
+    skyU.uTop.value.copy(P.top); skyU.uHor.value.copy(P.hor); skyU.uSun.value.copy(P.sun);
+    waterU.uNear.value.copy(P.water); waterU.uHor.value.copy(P.hor); waterU.uSun.value.copy(P.sun);
+    waterU.uCam.value.copy(eye); waterU.uTime.value = time;
+    scene.fog.color.copy(P.hor);
+    skyU.uMount.value.copy(P.mount); skyU.uTime.value = time; skyU.uNight.value = P.star;
+    waterU.uTop.value.copy(P.top); waterU.uMount.value.copy(P.mount); waterU.uNight.value = P.star;
+    ridgeFar.material.color.copy(P.mount).lerp(P.hor, 0.74);
+    ridgeNear.material.color.copy(P.mount).lerp(P.hor, 0.5);
+    starMat.opacity = P.star * 0.9;
+    hemi.color.copy(P.top).lerp(P.hor, 0.55); hemi.groundColor.copy(P.water); hemi.intensity = 0.8 + 0.35 * P.light;
+    sunLight.color.copy(P.sun); sunLight.intensity = 0.42 * P.light;
+    tmp.copy(sunDir).multiplyScalar(60).add(eye); sunLight.position.copy(tmp); sunLight.target.position.copy(eye);
+
+    // the nearest island you have not stood on yet
+    hudT -= dt;
+    if(hudT <= 0){
+      hudT = 0.5; goal = null;
+      var bs = 1e9;
+      for(var gi=0;gi<islands.length;gi++){
+        var GI = islands[gi]; if(GI.visited || (GI.z - S.pos.z) * S.dir > 4) continue;
+        var ex = GI.x - S.pos.x, ez = GI.z - S.pos.z, ed = Math.sqrt(ex*ex + ez*ez);
+        var sc2 = ed * (1.7 - 0.7 * Math.cos(angDiff(Math.atan2(-ex, -ez), S.yaw)));
+        if(sc2 < bs){ bs = sc2; goal = GI; }
+      }
+    }
+    var shoreP = Math.round(Math.max(0, S.dir > 0 ? S.pos.z - FARC.edge : HOMEC.edge - S.pos.z) / 0.75);
+    var nm, ds;
+    if(goal){
+      var gdx = goal.x - S.pos.x, gdz = goal.z - S.pos.z;
+      var paces = Math.round(Math.max(0, Math.sqrt(gdx*gdx + gdz*gdz) - goal.R) / 0.75);
+      var rel = angDiff(Math.atan2(-gdx, -gdz), S.yaw + S.look);
+      nm = (rel > 0.55 ? '‹ ' : '') + goal.name + (rel < -0.55 ? ' ›' : '');
+      ds = paces + ' paces · shore ' + shoreP.toLocaleString();
+    }else{ nm = S.dir > 0 ? 'The far shore' : 'The home shore'; ds = shoreP.toLocaleString() + ' paces'; }
+    if(goalNameEl.textContent !== nm) goalNameEl.textContent = nm;
+    if(goalDistEl.textContent !== ds) goalDistEl.textContent = ds;
+
+    // hints
+    if(S.mode === 'aim'){
+      if(time - S.noneT < 3.5) setHint('Flick upward and let go while your finger is moving.');
+      else if(time - S.sankT < 4.5) setHint('That one sank. Try a faster, lower flick with a curl at the end.');
+      else if(!hopOn && S.lastSkips > 0 && time - S.skipT < 4.5) setHint(S.lastSkips + (S.lastSkips === 1 ? ' skip' : ' skips'));
+      else if(nearIsland()) setHint(nearIsland().coast ? 'Tap to step ashore' : nearIsland().boat ? 'Tap to step aboard' : 'Tap to step onto the island');
+      else if(S.throws === 0 || time - S.aimSince > 6) setHint(AIM_HINT);
+      else if(hintText.indexOf('Tap to step') >= 0 || hintText.indexOf(' skip') >= 0) setHint('');
+      else if(hintText.indexOf('sank') >= 0 || hintText.indexOf('Flick upward') >= 0) setHint('');
+    }else if(S.mode === 'stroll'){ setHint(S.arrived);
+    }else if(S.mode === 'walk'){
+      if(next && !S.hop && next.gap > MAXHOP && S.skims < 2) setHint('A long one. Tap to skim across.');
+      else if(S.hops < 3) setHint('Tap to hop. A slower, gentler press glides.');
+      else if(S.graces < 3 && S.hops < 14) setHint('Let go as the ring closes for the softest landing');
+      else setHint('');
+    }else setHint('');
+  }
+
+  var last = 0;
+  function frame(now){
+    var t = now / 1000, dt = Math.min(0.05, t - last); last = t;
+    if(dt > 0){ time += dt; update(dt); renderer.render(scene, camera); }
+    requestAnimationFrame(frame);
+  }
+  palette(S.dayT); sunAt(S.dayT); update(0.0001); renderer.render(scene, camera);
+  requestAnimationFrame(function(now){ last = now / 1000; requestAnimationFrame(frame); });
+
+  var hot = window.claude && window.claude.hot;
+  if(hot && hot.snapshot){ try{ hot.snapshot(function(){ return {dayT:S.dayT}; }); }catch(e){} }
+}
+
+var hot = window.claude && window.claude.hot;
+if(hot && hot.ready) hot.ready(start); else start((hot && hot.data) || {});
+})();
+</script>
+</body>
+</html>
